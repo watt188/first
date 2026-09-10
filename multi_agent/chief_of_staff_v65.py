@@ -31,7 +31,7 @@ class ChiefOfStaffV65:
         self.pep = UnifiedPEPV61(root)
 
     @staticmethod
-    def _python_candidates(content: str) -> list[str]:
+    def _python_candidates(content: str, required_functions: set[str]) -> list[str]:
         text = (content or "").strip()
         if not text:
             return []
@@ -46,12 +46,36 @@ class ChiefOfStaffV65:
             if block:
                 candidates.append(block)
         candidates.append(text)
-        return list(dict.fromkeys(candidates))
+
+        # Reasoning-capable providers sometimes return prose plus unfenced code.
+        # Extract only suffixes that begin at a required top-level function name.
+        for name in sorted(required_functions):
+            marker = f"def {name}("
+            start = text.find(marker)
+            if start >= 0:
+                candidates.append(text[start:])
+
+        # For every candidate, also try the longest parseable line prefix. This
+        # safely drops trailing prose without guessing or executing it.
+        expanded: list[str] = []
+        for candidate in candidates:
+            expanded.append(candidate)
+            lines = candidate.splitlines()
+            for end in range(len(lines), 0, -1):
+                prefix = "\n".join(lines[:end]).strip()
+                if prefix:
+                    try:
+                        ast.parse(prefix)
+                    except SyntaxError:
+                        continue
+                    expanded.append(prefix)
+                    break
+        return list(dict.fromkeys(expanded))
 
     @classmethod
     def _validate_python(cls, content: str, required_functions: set[str]) -> str:
         last_syntax: SyntaxError | None = None
-        for candidate in cls._python_candidates(content):
+        for candidate in cls._python_candidates(content, required_functions):
             try:
                 tree = ast.parse(candidate)
             except SyntaxError as exc:
