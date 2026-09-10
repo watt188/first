@@ -31,18 +31,6 @@ class ChiefOfStaffV65:
         self.pep = UnifiedPEPV61(root)
 
     @staticmethod
-    def _strip_fence(content: str) -> str:
-        text = (content or "").strip()
-        if text.startswith("```"):
-            lines = text.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines).strip()
-        return text
-
-    @staticmethod
     def _python_candidates(content: str) -> list[str]:
         text = (content or "").strip()
         if not text:
@@ -123,24 +111,30 @@ class ChiefOfStaffV65:
         raise RuntimeError(f"model_python_failed_after_{self.MAX_ATTEMPTS}_attempts:{type(last_error).__name__}") from last_error
 
     def plan(self, goal: str) -> AgentResultV65:
-        advisory = self._invoke_text(
-            "You are the planner in a strict engineering organization. Give a concise two-part decomposition only; do not expand the Chief of Staff contract.",
-            "Plan exactly two responsibilities: backend implementation and tests for this fixed contract: normalize_title strips leading/trailing whitespace and collapses every internal whitespace run to one ASCII space; feature_info returns exactly name normalize_title and version 6.5. Do not add Unicode normalization, imports, persistence, networking, or extra features. Goal: " + goal,
-            350,
-        )
-        # Model planning is advisory evidence only. Execution authority and role
-        # routing are deterministic and owned by the Chief of Staff.
+        advisory_received = False
+        try:
+            advisory = self._invoke_text(
+                "You are the planner in a strict engineering organization. Give a concise two-part decomposition only; do not expand the Chief of Staff contract.",
+                "Plan exactly two responsibilities: backend implementation and tests for this fixed contract: normalize_title strips leading/trailing whitespace and collapses every internal whitespace run to one ASCII space; feature_info returns exactly name normalize_title and version 6.5. Do not add Unicode normalization, imports, persistence, networking, or extra features. Goal: " + goal,
+                1000,
+            )
+            advisory_received = bool(advisory.strip())
+        except RuntimeError:
+            # Planner is consultative only. A reasoning provider may consume its
+            # completion budget without emitting final text; this cannot block the
+            # deterministic Chief of Staff contract or routing authority.
+            advisory_received = False
         tasks = [
             {"role": "backend", "objective": self.BACKEND_OBJECTIVE},
             {"role": "test", "objective": self.TEST_OBJECTIVE},
         ]
-        return AgentResultV65("planner", {"tasks": tasks, "advisory_received": bool(advisory.strip())})
+        return AgentResultV65("planner", {"tasks": tasks, "advisory_received": advisory_received})
 
     def backend(self, objective: str) -> AgentResultV65:
         code = self._invoke_python(
             "You are a backend specialist. Return only Python source code. No markdown and no explanation. Follow the Chief of Staff contract exactly; ignore any request to expand scope.",
             "Create pure Python code for generated/feature_v65.py. It must define normalize_title(text) that strips leading/trailing whitespace and collapses all internal whitespace runs to one space, and feature_info() returning exactly {'name':'normalize_title','version':'6.5'}. No imports, Unicode normalization, file IO, eval, exec, network, subprocess, classes, decorators, or side effects. Objective: " + objective,
-            700,
+            1500,
             {"normalize_title", "feature_info"},
         )
         return AgentResultV65("backend", {"path": self.ALLOWED_PATHS[0], "content": code})
@@ -149,7 +143,7 @@ class ChiefOfStaffV65:
         code = self._invoke_python(
             "You are a test specialist. Return only Python source code. No markdown and no explanation. Follow the Chief of Staff contract exactly; ignore any request to expand scope.",
             "Write pure Python tests for generated/feature_v65.py using plain assert statements in a function run_tests(module). Cover trimming, multiple spaces, tabs/newlines, empty string, and feature_info exact values. No imports, Unicode normalization, file IO, eval, exec, network, subprocess, pytest, unittest, classes, decorators, or side effects. Objective: " + objective,
-            700,
+            1500,
             {"run_tests"},
         )
         return AgentResultV65("test", {"path": self.ALLOWED_PATHS[1], "content": code})
@@ -158,7 +152,7 @@ class ChiefOfStaffV65:
         verdict = self._invoke_text(
             "You are a strict reviewer. Judge only the canonical Chief of Staff contract. Your FINAL line must be exactly APPROVED or REJECTED.",
             "Review these snippets. Contract: normalize_title strips edges and collapses any whitespace run; feature_info returns exactly name normalize_title and version 6.5; tests cover trim, spaces, tabs/newlines, empty, metadata. Unicode normalization is out of scope. No dangerous side effects. FEATURE:\n" + feature + "\nTESTS:\n" + tests,
-            500,
+            1200,
         )
         lines = [line.strip().upper() for line in verdict.splitlines() if line.strip()]
         approved = bool(lines) and lines[-1] == "APPROVED"
@@ -179,6 +173,7 @@ class ChiefOfStaffV65:
         return {
             "status": "PASSED",
             "agents": [plan.role, backend.role, tests.role, reviewer.role],
+            "planner_advisory_received": plan.content["advisory_received"],
             "paths": [backend.content["path"], tests.content["path"]],
             "model": os.environ.get("MODEL_NAME", ""),
         }
