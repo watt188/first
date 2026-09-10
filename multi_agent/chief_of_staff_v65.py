@@ -24,13 +24,45 @@ class ChiefOfStaffV65:
         self.provider = OpenAICompatibleProviderV61()
         self.pep = UnifiedPEPV61(root)
 
+    @staticmethod
+    def _decode_json_object(content: str) -> dict[str, Any]:
+        text = (content or "").strip()
+        if not text:
+            raise ValueError("empty_model_response")
+
+        # Some providers still wrap JSON in markdown even when instructed not to.
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            # Fail closed, but tolerate harmless prose around one JSON object.
+            start = text.find("{")
+            end = text.rfind("}")
+            if start < 0 or end <= start:
+                raise ValueError("invalid_json_response")
+            try:
+                payload = json.loads(text[start:end + 1])
+            except json.JSONDecodeError as exc:
+                raise ValueError("invalid_json_response") from exc
+
+        if not isinstance(payload, dict):
+            raise ValueError("json_response_not_object")
+        return payload
+
     def _invoke_json(self, system: str, user: str, max_tokens: int = 700) -> dict[str, Any]:
         response = self.provider.invoke(
             ProviderRequestV61(system=system, user=user, temperature=0, max_tokens=max_tokens)
         )
         if not response.ok:
             raise RuntimeError(response.error or "provider_failed")
-        return json.loads(response.content)
+        return self._decode_json_object(response.content)
 
     def plan(self, goal: str) -> AgentResultV65:
         payload = self._invoke_json(
