@@ -15,13 +15,9 @@ class AgentResultV65:
 
 
 class ChiefOfStaffV65:
-    """Small production-style multi-agent orchestrator.
+    """Production-style bounded multi-agent orchestrator."""
 
-    One real planner call decomposes a bounded feature into specialist tasks.
-    Specialist outputs are constrained to JSON and all writes flow through PEP.
-    """
-
-    ROLES = ("planner", "backend", "test", "reviewer")
+    ALLOWED_PATHS = ("generated/feature_v65.py", "generated/test_feature_v65.py")
 
     def __init__(self, root: str = "."):
         self.root = root
@@ -29,7 +25,9 @@ class ChiefOfStaffV65:
         self.pep = UnifiedPEPV61(root)
 
     def _invoke_json(self, system: str, user: str, max_tokens: int = 700) -> dict[str, Any]:
-        response = self.provider.invoke(ProviderRequestV61(system=system, user=user, temperature=0, max_tokens=max_tokens))
+        response = self.provider.invoke(
+            ProviderRequestV61(system=system, user=user, temperature=0, max_tokens=max_tokens)
+        )
         if not response.ok:
             raise RuntimeError(response.error or "provider_failed")
         return json.loads(response.content)
@@ -50,12 +48,12 @@ class ChiefOfStaffV65:
             "You are a backend specialist. Return JSON only and no markdown.",
             "Create pure Python code for generated/feature_v65.py. It must define normalize_title(text) "
             "that strips leading/trailing whitespace and collapses all internal whitespace runs to one space, "
-            "and feature_info() returning a dict with name='normalize_title' and version='6.5'. "
+            "and feature_info() returning exactly {'name':'normalize_title','version':'6.5'}. "
             "No imports, file IO, eval, exec, network, subprocess, classes, decorators, or side effects. "
             "Return {\"path\":\"generated/feature_v65.py\",\"content\":str}. Objective: " + objective,
             500,
         )
-        if payload.get("path") != "generated/feature_v65.py" or not isinstance(payload.get("content"), str):
+        if payload.get("path") != self.ALLOWED_PATHS[0] or not isinstance(payload.get("content"), str):
             raise ValueError("invalid_backend_output")
         return AgentResultV65("backend", payload)
 
@@ -68,7 +66,7 @@ class ChiefOfStaffV65:
             "Return {\"path\":\"generated/test_feature_v65.py\",\"content\":str}. Objective: " + objective,
             600,
         )
-        if payload.get("path") != "generated/test_feature_v65.py" or not isinstance(payload.get("content"), str):
+        if payload.get("path") != self.ALLOWED_PATHS[1] or not isinstance(payload.get("content"), str):
             raise ValueError("invalid_test_output")
         return AgentResultV65("test", payload)
 
@@ -91,9 +89,10 @@ class ChiefOfStaffV65:
         tests = self.tests(test_task["objective"])
         reviewer = self.review(backend.content["content"], tests.content["content"])
 
-        # Both writes are bounded by the PEP allowlist configured by the caller/workflow.
-        self.pep.write_text("backend", backend.content["path"], backend.content["content"])
-        self.pep.write_text("backend", tests.content["path"], tests.content["content"])
+        feature_write = self.pep.write_text("backend", backend.content["path"], backend.content["content"], self.ALLOWED_PATHS)
+        test_write = self.pep.write_text("backend", tests.content["path"], tests.content["content"], self.ALLOWED_PATHS)
+        if feature_write.get("status") != "WRITTEN" or test_write.get("status") != "WRITTEN":
+            raise RuntimeError("pep_write_failed")
 
         return {
             "status": "PASSED",
