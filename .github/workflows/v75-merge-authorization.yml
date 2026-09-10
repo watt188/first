@@ -1,0 +1,19 @@
+name: v75-merge-authorization
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  merge-authorization:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --disable-pip-version-check pytest
+      - name: Run V7.5 deterministic merge authorization tests
+        run: python -m pytest -q tests/test_merge_gate_v75.py
