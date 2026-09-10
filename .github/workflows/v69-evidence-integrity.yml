@@ -1,0 +1,45 @@
+name: v69-evidence-integrity
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  evidence-integrity:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Run V6.9 evidence integrity tests
+        run: python -m pytest -q tests/test_evidence_integrity_v69.py
+      - name: Build deterministic V6.9 proof files
+        run: |
+          mkdir -p artifacts generated
+          printf '{"status":"PASSED","gate":"v69"}\n' > artifacts/v69-proof.json
+          printf 'def proof():\n    return "v6.9"\n' > generated/v69_proof.py
+      - name: Seal evidence
+        env:
+          EVIDENCE_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python -m evidence_integrity.v69 seal \
+            --manifest artifacts/v69-evidence-manifest.json \
+            artifacts/v69-proof.json generated/v69_proof.py
+      - name: Verify sealed evidence
+        env:
+          EVIDENCE_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python -m evidence_integrity.v69 verify --manifest artifacts/v69-evidence-manifest.json
+      - name: Upload V6.9 evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v69-evidence-integrity
+          path: |
+            artifacts/v69-proof.json
+            artifacts/v69-evidence-manifest.json
+            generated/v69_proof.py
