@@ -28,10 +28,8 @@ class ChiefOfStaffV65:
         self.pep = UnifiedPEPV61(root)
 
     @staticmethod
-    def _decode_json_object(content: str) -> dict[str, Any]:
+    def _strip_fence(content: str) -> str:
         text = (content or "").strip()
-        if not text:
-            raise ValueError("empty_model_response")
         if text.startswith("```"):
             lines = text.splitlines()
             if lines and lines[0].startswith("```"):
@@ -39,6 +37,13 @@ class ChiefOfStaffV65:
             if lines and lines[-1].strip() == "```":
                 lines = lines[:-1]
             text = "\n".join(lines).strip()
+        return text
+
+    @classmethod
+    def _decode_json_object(cls, content: str) -> dict[str, Any]:
+        text = cls._strip_fence(content)
+        if not text:
+            raise ValueError("empty_model_response")
 
         candidates = [text]
         start = text.find("{")
@@ -55,10 +60,6 @@ class ChiefOfStaffV65:
                     return payload
             except json.JSONDecodeError:
                 pass
-
-            # Some OpenAI-compatible reasoning models emit Python-literal-like
-            # objects with single quotes. literal_eval is non-executing and we
-            # still require a plain dict before any downstream schema checks.
             try:
                 payload = ast.literal_eval(candidate)
                 if isinstance(payload, dict):
@@ -68,7 +69,7 @@ class ChiefOfStaffV65:
 
         raise ValueError("invalid_json_response")
 
-    def _invoke_json(self, system: str, user: str, max_tokens: int = 700) -> dict[str, Any]:
+    def _invoke_raw(self, system: str, user: str, max_tokens: int) -> str:
         last_error: Exception | None = None
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             response = self.provider.invoke(
@@ -77,7 +78,22 @@ class ChiefOfStaffV65:
             try:
                 if not response.ok:
                     raise RuntimeError(response.error or "provider_failed")
-                return self._decode_json_object(response.content)
+                text = self._strip_fence(response.content)
+                if not text:
+                    raise ValueError("empty_model_response")
+                return text
+            except (RuntimeError, ValueError) as exc:
+                last_error = exc
+                if attempt < self.MAX_ATTEMPTS:
+                    time.sleep(0.5 * attempt)
+        raise RuntimeError(f"model_text_failed_after_{self.MAX_ATTEMPTS}_attempts:{type(last_error).__name__}") from last_error
+
+    def _invoke_json(self, system: str, user: str, max_tokens: int = 700) -> dict[str, Any]:
+        last_error: Exception | None = None
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            try:
+                text = self._invoke_raw(system, user, max_tokens)
+                return self._decode_json_object(text)
             except (RuntimeError, ValueError) as exc:
                 last_error = exc
                 if attempt < self.MAX_ATTEMPTS:
@@ -95,24 +111,22 @@ class ChiefOfStaffV65:
         return AgentResultV65("planner", payload)
 
     def backend(self, objective: str) -> AgentResultV65:
-        payload = self._invoke_json(
-            "You are a backend specialist. Return JSON only and no markdown.",
-            "Create pure Python code for generated/feature_v65.py. It must define normalize_title(text) that strips leading/trailing whitespace and collapses all internal whitespace runs to one space, and feature_info() returning exactly {'name':'normalize_title','version':'6.5'}. No imports, file IO, eval, exec, network, subprocess, classes, decorators, or side effects. Return {\"path\":\"generated/feature_v65.py\",\"content\":str}. Objective: " + objective,
+        code = self._invoke_raw(
+            "You are a backend specialist. Return only Python source code. No markdown and no explanation.",
+            "Create pure Python code for generated/feature_v65.py. It must define normalize_title(text) that strips leading/trailing whitespace and collapses all internal whitespace runs to one space, and feature_info() returning exactly {'name':'normalize_title','version':'6.5'}. No imports, file IO, eval, exec, network, subprocess, classes, decorators, or side effects. Objective: " + objective,
             500,
         )
-        if payload.get("path") != self.ALLOWED_PATHS[0] or not isinstance(payload.get("content"), str):
-            raise ValueError("invalid_backend_output")
-        return AgentResultV65("backend", payload)
+        ast.parse(code)
+        return AgentResultV65("backend", {"path": self.ALLOWED_PATHS[0], "content": code})
 
     def tests(self, objective: str) -> AgentResultV65:
-        payload = self._invoke_json(
-            "You are a test specialist. Return JSON only and no markdown.",
-            "Write pure Python tests for generated/feature_v65.py using plain assert statements in a function run_tests(module). Cover trimming, multiple spaces, tabs/newlines, empty string, and feature_info exact values. No imports, file IO, eval, exec, network, subprocess, pytest, unittest, classes, decorators, or side effects. Return {\"path\":\"generated/test_feature_v65.py\",\"content\":str}. Objective: " + objective,
+        code = self._invoke_raw(
+            "You are a test specialist. Return only Python source code. No markdown and no explanation.",
+            "Write pure Python tests for generated/feature_v65.py using plain assert statements in a function run_tests(module). Cover trimming, multiple spaces, tabs/newlines, empty string, and feature_info exact values. No imports, file IO, eval, exec, network, subprocess, pytest, unittest, classes, decorators, or side effects. Objective: " + objective,
             600,
         )
-        if payload.get("path") != self.ALLOWED_PATHS[1] or not isinstance(payload.get("content"), str):
-            raise ValueError("invalid_test_output")
-        return AgentResultV65("test", payload)
+        ast.parse(code)
+        return AgentResultV65("test", {"path": self.ALLOWED_PATHS[1], "content": code})
 
     def review(self, feature: str, tests: str) -> AgentResultV65:
         payload = self._invoke_json(
