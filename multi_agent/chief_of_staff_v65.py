@@ -24,7 +24,7 @@ class ChiefOfStaffV65:
     BANNED_ATTRS = {"system", "popen", "spawn", "remove", "unlink", "rmdir", "rename", "replace"}
     BACKEND_OBJECTIVE = "Implement only the canonical normalize_title and feature_info contract specified by the Chief of Staff. Do not add Unicode normalization or any requirement not explicitly present in that contract."
     TEST_OBJECTIVE = "Test only the canonical normalize_title and feature_info contract specified by the Chief of Staff. Do not add Unicode normalization or any requirement not explicitly present in that contract."
-    CANONICAL_TESTS = '''def run_tests(module):
+    CANONICAL_TESTS = r'''def run_tests(module):
     assert module.normalize_title("  hello  world  ") == "hello world"
     assert module.normalize_title("hello\t\nworld") == "hello world"
     assert module.normalize_title("   ") == ""
@@ -172,9 +172,6 @@ class ChiefOfStaffV65:
             )
             model_generated = True
         except RuntimeError:
-            # Test-agent output is advisory generation. The Chief of Staff owns the
-            # canonical acceptance contract, so provider formatting variance cannot
-            # remove required tests. The deterministic suite is still AST-validated.
             code = self._validate_python(self.CANONICAL_TESTS, {"run_tests"})
         return AgentResultV65("test", {"path": self.ALLOWED_PATHS[1], "content": code, "model_generated": model_generated})
 
