@@ -1,0 +1,22 @@
+name: v63-strict-provider
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  strict-real-provider:
+    runs-on: ubuntu-latest
+    env:
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+      MODEL_BASE_URL: ${{ secrets.MODEL_BASE_URL }}
+      MODEL_NAME: ${{ secrets.MODEL_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Require configured real provider
+        run: python -m real_provider.strict_smoke_v63
