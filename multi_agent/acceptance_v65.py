@@ -17,6 +17,22 @@ def _load(path: Path, name: str):
     return module
 
 
+def _assert_test_contract(tests: str) -> int:
+    tree = ast.parse(tests)
+    run_tests = next((node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "run_tests"), None)
+    if run_tests is None:
+        raise AssertionError("missing_run_tests")
+    assert_count = sum(isinstance(node, ast.Assert) for node in ast.walk(run_tests))
+    if assert_count < 5:
+        raise AssertionError("insufficient_generated_test_coverage")
+    required_literals = ("hello world", "normalize_title", "6.5")
+    if not all(value in tests for value in required_literals):
+        raise AssertionError("generated_test_contract_literals_missing")
+    if "\\t" not in tests or "\\n" not in tests:
+        raise AssertionError("generated_test_whitespace_case_missing")
+    return assert_count
+
+
 def main() -> None:
     goal = "Ship a safe title-normalization utility with independent tests and reviewer approval."
     result = ChiefOfStaffV65(".").run(goal)
@@ -28,6 +44,7 @@ def main() -> None:
 
     ast.parse(feature)
     ast.parse(tests)
+    generated_assert_count = _assert_test_contract(tests)
     combined = feature + "\n" + tests
     if any(token in combined for token in BANNED):
         raise RuntimeError("banned_symbol")
@@ -38,6 +55,8 @@ def main() -> None:
 
     if module.normalize_title("  hello\t\n world  ") != "hello world":
         raise AssertionError("acceptance_normalize_failed")
+    if module.normalize_title("   ") != "":
+        raise AssertionError("acceptance_blank_failed")
     if module.feature_info() != {"name": "normalize_title", "version": "6.5"}:
         raise AssertionError("acceptance_metadata_failed")
 
@@ -45,6 +64,7 @@ def main() -> None:
         **result,
         "goal": goal,
         "acceptance": "PASSED",
+        "generated_assert_count": generated_assert_count,
         "feature_bytes": len(feature.encode("utf-8")),
         "test_bytes": len(tests.encode("utf-8")),
     }
