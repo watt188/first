@@ -123,7 +123,13 @@ class ChiefOfStaffV65:
         return all(token in code for token in required_tokens)
 
     def _provider_text(self, system: str, user: str, max_tokens: int) -> str:
-        response = self.provider.invoke(ProviderRequestV61(system=system, user=user, temperature=0, max_tokens=max_tokens))
+        request = ProviderRequestV61(system=system, user=user, temperature=0, max_tokens=max_tokens)
+        response = self.provider.invoke(request)
+        if not response.ok and response.error == "provider_circuit_open":
+            retry_after = min(30.0, max(0.0, float(self.provider.circuit_retry_after_seconds())))
+            if retry_after > 0:
+                time.sleep(retry_after)
+            response = self.provider.invoke(request)
         if not response.ok:
             raise RuntimeError(response.error or "provider_failed")
         text = response.content or ""

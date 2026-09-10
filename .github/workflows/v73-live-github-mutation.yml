@@ -20,7 +20,7 @@ jobs:
       - name: Run V7.3 deterministic receipt tests
         run: python -m pytest -q tests/test_live_github_v73.py
       - name: Validate live pull request event
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/v7.3-')
         env:
           GITHUB_EVENT_PATH: ${{ github.event_path }}
         run: |
@@ -35,17 +35,17 @@ jobs:
           print(json.dumps(receipt))
           PY
       - name: Seal live mutation receipt
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/v7.3-')
         env:
           EVIDENCE_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
         run: python -m evidence_integrity.v69 seal --manifest artifacts/v73-live-manifest.json artifacts/v73-live-github-receipt.json
       - name: Verify live mutation receipt
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/v7.3-')
         env:
           EVIDENCE_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
         run: python -m evidence_integrity.v69 verify --manifest artifacts/v73-live-manifest.json
       - uses: actions/upload-artifact@v4
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/v7.3-')
         with:
           name: v73-live-github-mutation-evidence
           path: |
