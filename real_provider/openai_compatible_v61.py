@@ -12,9 +12,9 @@ from real_provider.contracts_v61 import ProviderResponseV61
 class OpenAICompatibleProviderV61:
     """OpenAI-compatible provider with bounded production resilience.
 
-    V7.4 preserves the V6.1 interface and V6.7 retry behavior, while making
-    circuit state recoverable during long multi-agent invocations. Raw provider
-    reasoning and response bodies are never surfaced in errors.
+    V7.4 preserves V6.7 fail-fast circuit semantics and exposes a bounded
+    retry-after value so orchestration can wait for cooldown without spinning.
+    Raw provider reasoning and response bodies are never surfaced in errors.
     """
 
     REQUIRED = ("MODEL_API_KEY", "MODEL_BASE_URL", "MODEL_NAME")
@@ -51,6 +51,15 @@ class OpenAICompatibleProviderV61:
     def circuit_cooldown_seconds(self):
         return self._env_int("MODEL_CIRCUIT_COOLDOWN_SECONDS", 30, 1, 300)
 
+    def _circuit_remaining_seconds(self):
+        if self.circuit_opened_at is None:
+            return 0.0
+        return max(0.0, self.circuit_cooldown_seconds - (time.monotonic() - self.circuit_opened_at))
+
+    def circuit_retry_after_seconds(self):
+        """Return bounded remaining cooldown for an open circuit."""
+        return min(float(self.circuit_cooldown_seconds), self._circuit_remaining_seconds())
+
     def health(self):
         return {
             "configured": self.configured(),
@@ -58,12 +67,8 @@ class OpenAICompatibleProviderV61:
             "failure_count": self.failure_count,
             "max_attempts": self.max_attempts,
             "timeout_seconds": self.timeout_seconds,
+            "circuit_retry_after_seconds": self.circuit_retry_after_seconds(),
         }
-
-    def _circuit_remaining_seconds(self):
-        if self.circuit_opened_at is None:
-            return 0.0
-        return max(0.0, self.circuit_cooldown_seconds - (time.monotonic() - self.circuit_opened_at))
 
     def _circuit_is_open(self):
         if self.circuit_opened_at is None:
@@ -150,13 +155,7 @@ class OpenAICompatibleProviderV61:
         if not self.configured():
             return ProviderResponseV61(False, error="provider_not_configured", model=model)
         if self._circuit_is_open():
-            # A multi-agent run may legitimately outlive the cooldown. Wait only
-            # for the bounded remaining cooldown, then allow one recovery probe.
-            remaining = self._circuit_remaining_seconds()
-            if remaining > 0:
-                time.sleep(remaining)
-            self.circuit_opened_at = None
-            self.failure_count = 0
+            return ProviderResponseV61(False, error="provider_circuit_open", model=model)
 
         req = self._build_request(request)
         started = time.monotonic()
