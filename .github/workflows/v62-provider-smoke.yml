@@ -1,0 +1,32 @@
+name: v62-provider-smoke
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deterministic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --upgrade pip pytest
+      - run: python -m pytest tests/test_v61_real_provider.py -q
+
+  real-provider-smoke:
+    runs-on: ubuntu-latest
+    env:
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+      MODEL_BASE_URL: ${{ secrets.MODEL_BASE_URL }}
+      MODEL_NAME: ${{ secrets.MODEL_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run provider smoke test
+        run: python -m real_provider.smoke_v62
