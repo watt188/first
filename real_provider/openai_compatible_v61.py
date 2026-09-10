@@ -12,10 +12,9 @@ from real_provider.contracts_v61 import ProviderResponseV61
 class OpenAICompatibleProviderV61:
     """OpenAI-compatible provider with bounded production resilience.
 
-    V6.7 preserves the V6.1 public interface while adding classified retries,
-    exponential backoff with jitter, timeout handling, and a simple circuit
-    breaker. Raw provider reasoning and response bodies are never surfaced in
-    error strings.
+    V7.4 preserves the V6.1 interface and V6.7 retry behavior, while making
+    circuit state recoverable during long multi-agent invocations. Raw provider
+    reasoning and response bodies are never surfaced in errors.
     """
 
     REQUIRED = ("MODEL_API_KEY", "MODEL_BASE_URL", "MODEL_NAME")
@@ -61,11 +60,15 @@ class OpenAICompatibleProviderV61:
             "timeout_seconds": self.timeout_seconds,
         }
 
+    def _circuit_remaining_seconds(self):
+        if self.circuit_opened_at is None:
+            return 0.0
+        return max(0.0, self.circuit_cooldown_seconds - (time.monotonic() - self.circuit_opened_at))
+
     def _circuit_is_open(self):
         if self.circuit_opened_at is None:
             return False
-        elapsed = time.monotonic() - self.circuit_opened_at
-        if elapsed >= self.circuit_cooldown_seconds:
+        if self._circuit_remaining_seconds() <= 0:
             self.circuit_opened_at = None
             self.failure_count = 0
             return False
@@ -85,8 +88,6 @@ class OpenAICompatibleProviderV61:
         content = message.get("content") or ""
         if content.strip():
             return content
-        # Reasoning traces are never returned wholesale. Recover only an
-        # explicitly delimited final answer/code block.
         reasoning = message.get("reasoning_content") or ""
         if not reasoning:
             return ""
@@ -140,10 +141,7 @@ class OpenAICompatibleProviderV61:
         return urllib.request.Request(
             url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": "Bearer " + os.environ["MODEL_API_KEY"],
-                "Content-Type": "application/json",
-            },
+            headers={"Authorization": "Bearer " + os.environ["MODEL_API_KEY"], "Content-Type": "application/json"},
             method="POST",
         )
 
@@ -152,41 +150,32 @@ class OpenAICompatibleProviderV61:
         if not self.configured():
             return ProviderResponseV61(False, error="provider_not_configured", model=model)
         if self._circuit_is_open():
-            return ProviderResponseV61(False, error="provider_circuit_open", model=model)
+            # A multi-agent run may legitimately outlive the cooldown. Wait only
+            # for the bounded remaining cooldown, then allow one recovery probe.
+            remaining = self._circuit_remaining_seconds()
+            if remaining > 0:
+                time.sleep(remaining)
+            self.circuit_opened_at = None
+            self.failure_count = 0
 
         req = self._build_request(request)
         started = time.monotonic()
         last_error = "provider_failed"
-
         for attempt in range(1, self.max_attempts + 1):
             retryable = False
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
                     body = json.loads(resp.read().decode("utf-8"))
-                message = body["choices"][0]["message"]
-                content = self._final_content(message)
+                content = self._final_content(body["choices"][0]["message"])
                 if not content.strip():
-                    last_error = "empty_model_response"
-                    retryable = True
+                    last_error, retryable = "empty_model_response", True
                 else:
                     self._record_success()
-                    return ProviderResponseV61(
-                        True,
-                        content=content,
-                        model=model,
-                        latency_ms=int((time.monotonic() - started) * 1000),
-                    )
+                    return ProviderResponseV61(True, content=content, model=model, latency_ms=int((time.monotonic() - started) * 1000))
             except Exception as exc:
                 last_error, retryable = self._classify_exception(exc)
-
             if not retryable or attempt >= self.max_attempts:
                 break
             time.sleep(self._backoff_seconds(attempt))
-
         self._record_failure()
-        return ProviderResponseV61(
-            False,
-            error=last_error,
-            model=model,
-            latency_ms=int((time.monotonic() - started) * 1000),
-        )
+        return ProviderResponseV61(False, error=last_error, model=model, latency_ms=int((time.monotonic() - started) * 1000))
