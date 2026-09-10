@@ -1,0 +1,21 @@
+name: v67-provider-resilience
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  provider-resilience:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Run V6.7 provider resilience tests
+        run: python -m pytest -q tests/test_provider_resilience_v67.py
