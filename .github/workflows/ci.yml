@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile production modules
+        run: |
+          python -m compileall production_baseline production_runtime side_effect_governance release_manager release_candidate multi_agent_delivery governed_model_loop
+      - name: Baseline smoke test
+        run: |
+          python - <<'PY'
+          from production_baseline.profile_v60 import ProductionProfileV60
+          p=ProductionProfileV60()
+          assert p.runtime_version == '6.0'
+          assert p.side_effect_policy == 'default-deny'
+          print('V6.0 baseline smoke test passed')
+          PY
