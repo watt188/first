@@ -1,13 +1,13 @@
 import json
 from real_provider.contracts_v61 import ProviderRequestV61
 from real_provider.openai_compatible_v61 import OpenAICompatibleProviderV61
-from side_effect_governance.pep_v59 import UnifiedPEPV59
+from real_provider.pep_v61 import UnifiedPEPV61
 
 class RealProviderAgentV61:
     def __init__(self,root,provider=None):
         self.root=root
         self.provider=provider or OpenAICompatibleProviderV61()
-        self.pep=UnifiedPEPV59(root)
+        self.pep=UnifiedPEPV61(root)
 
     def execute_writer(self,role,goal,allowed_paths):
         req=ProviderRequestV61(
