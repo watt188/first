@@ -10,6 +10,36 @@ class OpenAICompatibleProviderV61:
     def configured(self):
         return all(os.getenv(k) for k in self.REQUIRED)
 
+    @staticmethod
+    def _final_content(message):
+        content=message.get("content") or ""
+        if content.strip():
+            return content
+        # Some OpenAI-compatible reasoning providers spend the whole token budget
+        # in reasoning_content and leave content empty. Recover only an explicitly
+        # delimited final answer/code block; never expose or forward the full trace.
+        reasoning=message.get("reasoning_content") or ""
+        if not reasoning:
+            return ""
+        fenced=reasoning.rfind("```")
+        if fenced >= 0:
+            before=reasoning.rfind("```",0,fenced)
+            if before >= 0:
+                block=reasoning[before+3:fenced].strip()
+                if block.lower().startswith("python"):
+                    block=block[6:].lstrip("\r\n ")
+                elif block.lower().startswith("py"):
+                    block=block[2:].lstrip("\r\n ")
+                if block:
+                    return block
+        for marker in ("FINAL ANSWER:","FINAL:","ANSWER:"):
+            idx=reasoning.upper().rfind(marker)
+            if idx >= 0:
+                candidate=reasoning[idx+len(marker):].strip()
+                if candidate:
+                    return candidate
+        return ""
+
     def invoke(self, request):
         if not self.configured():
             return ProviderResponseV61(False,error="provider_not_configured")
@@ -38,10 +68,7 @@ class OpenAICompatibleProviderV61:
             with urllib.request.urlopen(req,timeout=30) as resp:
                 body=json.loads(resp.read().decode("utf-8"))
             message=body["choices"][0]["message"]
-            # Only the assistant's final content is an executable/structured
-            # response. reasoning_content is an internal reasoning trace and can
-            # be truncated or non-JSON/non-code; never promote it to final output.
-            content=message.get("content") or ""
+            content=self._final_content(message)
             return ProviderResponseV61(True,content=content,model=os.environ["MODEL_NAME"],latency_ms=int((time.time()-started)*1000))
         except Exception as e:
             return ProviderResponseV61(False,error=type(e).__name__,model=os.getenv("MODEL_NAME",""),latency_ms=int((time.time()-started)*1000))
