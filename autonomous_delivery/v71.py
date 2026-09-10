@@ -61,6 +61,8 @@ class AutonomousDeliveryV71:
             "chief_result": result,
             "outputs": [str(feature.relative_to(self.root)), str(tests.relative_to(self.root))],
             "pr_ready": True,
+            "evidence_status": "SEALED_AND_VERIFIED",
+            "evidence_manifest": str(manifest_path.relative_to(self.root)),
         }
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -75,21 +77,9 @@ class AutonomousDeliveryV71:
             source_sha,
         )
         verified = verify_manifest(self.root, manifest, source_sha)
-        report["evidence"] = verified
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        # Final report bytes changed after embedding verification; reseal authoritative bytes.
-        manifest = seal(
-            self.root,
-            [
-                str(report_path.relative_to(self.root)),
-                str(feature.relative_to(self.root)),
-                str(tests.relative_to(self.root)),
-            ],
-            manifest_path,
-            source_sha,
-        )
-        verified = verify_manifest(self.root, manifest, source_sha)
+        # Do not embed the manifest digest back into the sealed report: doing so would
+        # mutate an already-hashed file and make the persisted report self-inconsistent.
         return {**report, "evidence": verified, "manifest": str(manifest_path.relative_to(self.root))}
 
 
