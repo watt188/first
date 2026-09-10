@@ -1,0 +1,103 @@
+import json
+import os
+from dataclasses import dataclass
+from typing import Any
+
+from real_provider.openai_compatible_v61 import OpenAICompatibleProviderV61
+from real_provider.contracts_v61 import ProviderRequestV61
+from real_provider.pep_v61 import UnifiedPEPV61
+
+
+@dataclass
+class AgentResultV65:
+    role: str
+    content: dict[str, Any]
+
+
+class ChiefOfStaffV65:
+    """Small production-style multi-agent orchestrator.
+
+    One real planner call decomposes a bounded feature into specialist tasks.
+    Specialist outputs are constrained to JSON and all writes flow through PEP.
+    """
+
+    ROLES = ("planner", "backend", "test", "reviewer")
+
+    def __init__(self, root: str = "."):
+        self.root = root
+        self.provider = OpenAICompatibleProviderV61()
+        self.pep = UnifiedPEPV61(root)
+
+    def _invoke_json(self, system: str, user: str, max_tokens: int = 700) -> dict[str, Any]:
+        response = self.provider.invoke(ProviderRequestV61(system=system, user=user, temperature=0, max_tokens=max_tokens))
+        if not response.ok:
+            raise RuntimeError(response.error or "provider_failed")
+        return json.loads(response.content)
+
+    def plan(self, goal: str) -> AgentResultV65:
+        payload = self._invoke_json(
+            "You are the planner in a strict engineering organization. Return JSON only.",
+            "Decompose this goal into exactly 2 tasks: backend implementation and tests. "
+            "Return {\"tasks\":[{\"role\":\"backend\",\"objective\":str},{\"role\":\"test\",\"objective\":str}]}. Goal: " + goal,
+        )
+        tasks = payload.get("tasks", [])
+        if [t.get("role") for t in tasks] != ["backend", "test"]:
+            raise ValueError("invalid_plan")
+        return AgentResultV65("planner", payload)
+
+    def backend(self, objective: str) -> AgentResultV65:
+        payload = self._invoke_json(
+            "You are a backend specialist. Return JSON only and no markdown.",
+            "Create pure Python code for generated/feature_v65.py. It must define normalize_title(text) "
+            "that strips leading/trailing whitespace and collapses all internal whitespace runs to one space, "
+            "and feature_info() returning a dict with name='normalize_title' and version='6.5'. "
+            "No imports, file IO, eval, exec, network, subprocess, classes, decorators, or side effects. "
+            "Return {\"path\":\"generated/feature_v65.py\",\"content\":str}. Objective: " + objective,
+            500,
+        )
+        if payload.get("path") != "generated/feature_v65.py" or not isinstance(payload.get("content"), str):
+            raise ValueError("invalid_backend_output")
+        return AgentResultV65("backend", payload)
+
+    def tests(self, objective: str) -> AgentResultV65:
+        payload = self._invoke_json(
+            "You are a test specialist. Return JSON only and no markdown.",
+            "Write pure Python tests for generated/feature_v65.py using plain assert statements in a function run_tests(module). "
+            "Cover trimming, multiple spaces, tabs/newlines, empty string, and feature_info exact values. "
+            "No imports, file IO, eval, exec, network, subprocess, pytest, unittest, classes, decorators, or side effects. "
+            "Return {\"path\":\"generated/test_feature_v65.py\",\"content\":str}. Objective: " + objective,
+            600,
+        )
+        if payload.get("path") != "generated/test_feature_v65.py" or not isinstance(payload.get("content"), str):
+            raise ValueError("invalid_test_output")
+        return AgentResultV65("test", payload)
+
+    def review(self, feature: str, tests: str) -> AgentResultV65:
+        payload = self._invoke_json(
+            "You are a strict reviewer. Return JSON only.",
+            "Review two Python snippets against this contract: normalize_title strips edges and collapses any whitespace run; "
+            "feature_info returns exactly name normalize_title and version 6.5; tests cover trim, spaces, tabs/newlines, empty, metadata. "
+            "No dangerous side effects. Return {\"approved\":bool,\"reasons\":[str]}. FEATURE:\n" + feature + "\nTESTS:\n" + tests,
+            500,
+        )
+        if payload.get("approved") is not True:
+            raise ValueError("review_rejected:" + ";".join(payload.get("reasons", [])))
+        return AgentResultV65("reviewer", payload)
+
+    def run(self, goal: str) -> dict[str, Any]:
+        plan = self.plan(goal)
+        backend_task, test_task = plan.content["tasks"]
+        backend = self.backend(backend_task["objective"])
+        tests = self.tests(test_task["objective"])
+        reviewer = self.review(backend.content["content"], tests.content["content"])
+
+        # Both writes are bounded by the PEP allowlist configured by the caller/workflow.
+        self.pep.write_text("backend", backend.content["path"], backend.content["content"])
+        self.pep.write_text("backend", tests.content["path"], tests.content["content"])
+
+        return {
+            "status": "PASSED",
+            "agents": [plan.role, backend.role, tests.role, reviewer.role],
+            "paths": [backend.content["path"], tests.content["path"]],
+            "model": os.environ.get("MODEL_NAME", ""),
+        }
