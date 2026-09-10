@@ -22,11 +22,23 @@ jobs:
           python-version: '3.11'
       - name: Run planner specialist reviewer pipeline
         run: python -m multi_agent.acceptance_v65
+      - name: Seal V6.5 evidence
+        env:
+          EVIDENCE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python -m evidence_integrity.v69 seal \
+            --manifest artifacts/v65-evidence-manifest.json \
+            artifacts/v65-evidence.json \
+            generated/feature_v65.py \
+            generated/test_feature_v65.py
+          python -m evidence_integrity.v69 verify \
+            --manifest artifacts/v65-evidence-manifest.json
       - name: Upload V6.5 evidence
         uses: actions/upload-artifact@v4
         with:
           name: v65-multi-agent-evidence
           path: |
             artifacts/v65-evidence.json
+            artifacts/v65-evidence-manifest.json
             generated/feature_v65.py
             generated/test_feature_v65.py
