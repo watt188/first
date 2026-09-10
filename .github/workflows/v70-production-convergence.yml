@@ -1,0 +1,44 @@
+name: v70-production-convergence
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+  MODEL_BASE_URL: ${{ secrets.MODEL_BASE_URL }}
+  MODEL_NAME: ${{ secrets.MODEL_NAME }}
+  PRODUCTION_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  production-convergence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Run V7.0 deterministic tests
+        run: python -m pytest -q tests/test_production_runtime_v70.py
+      - name: Run production preflight
+        run: python -m production_runtime.v70 preflight
+      - name: Run converged production delivery
+        run: python -m production_runtime.v70 deliver
+      - name: Re-verify release evidence
+        run: python -m production_runtime.v70 verify
+      - name: Upload V7.0 production evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v70-production-convergence-evidence
+          path: |
+            artifacts/v65-evidence.json
+            artifacts/v70-production-manifest.json
+            artifacts/v70-production-report.json
+            generated/feature_v65.py
+            generated/test_feature_v65.py
