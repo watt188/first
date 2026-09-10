@@ -23,6 +23,8 @@ class ChiefOfStaffV65:
     MAX_ATTEMPTS = 3
     BANNED_NAMES = {"open", "eval", "exec", "compile", "__import__", "input"}
     BANNED_ATTRS = {"system", "popen", "spawn", "remove", "unlink", "rmdir", "rename", "replace"}
+    BACKEND_OBJECTIVE = "Implement only the canonical normalize_title and feature_info contract specified by the Chief of Staff. Do not add Unicode normalization or any requirement not explicitly present in that contract."
+    TEST_OBJECTIVE = "Test only the canonical normalize_title and feature_info contract specified by the Chief of Staff. Do not add Unicode normalization or any requirement not explicitly present in that contract."
 
     def __init__(self, root: str = "."):
         self.root = root
@@ -74,8 +76,6 @@ class ChiefOfStaffV65:
         if not text:
             return []
         candidates: list[str] = []
-        # Prefer fenced code wherever it appears. Reasoning-capable providers can
-        # prepend analysis even when instructed to return source only.
         parts = text.split("```")
         for index in range(1, len(parts), 2):
             block = parts[index].strip()
@@ -86,7 +86,6 @@ class ChiefOfStaffV65:
             if block:
                 candidates.append(block)
         candidates.append(text)
-        # Deduplicate while preserving preference order.
         return list(dict.fromkeys(candidates))
 
     @classmethod
@@ -101,10 +100,8 @@ class ChiefOfStaffV65:
             found = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
             if not required_functions.issubset(found):
                 continue
-            # Generated artifacts are intentionally tiny and pure. Reject imports,
-            # classes and executable top-level statements before any execution.
             for node in tree.body:
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if isinstance(node, ast.FunctionDef):
                     continue
                 if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
                     continue
@@ -122,26 +119,13 @@ class ChiefOfStaffV65:
         raise ValueError("missing_required_function")
 
     def _provider_text(self, system: str, user: str, max_tokens: int) -> str:
-        response = self.provider.invoke(
-            ProviderRequestV61(system=system, user=user, temperature=0, max_tokens=max_tokens)
-        )
+        response = self.provider.invoke(ProviderRequestV61(system=system, user=user, temperature=0, max_tokens=max_tokens))
         if not response.ok:
             raise RuntimeError(response.error or "provider_failed")
         text = response.content or ""
         if not text.strip():
             raise ValueError("empty_model_response")
         return text
-
-    def _invoke_raw(self, system: str, user: str, max_tokens: int) -> str:
-        last_error: Exception | None = None
-        for attempt in range(1, self.MAX_ATTEMPTS + 1):
-            try:
-                return self._strip_fence(self._provider_text(system, user, max_tokens))
-            except (RuntimeError, ValueError) as exc:
-                last_error = exc
-                if attempt < self.MAX_ATTEMPTS:
-                    time.sleep(0.5 * attempt)
-        raise RuntimeError(f"model_text_failed_after_{self.MAX_ATTEMPTS}_attempts:{type(last_error).__name__}") from last_error
 
     def _invoke_json(self, system: str, user: str, max_tokens: int = 700) -> dict[str, Any]:
         last_error: Exception | None = None
@@ -168,18 +152,22 @@ class ChiefOfStaffV65:
 
     def plan(self, goal: str) -> AgentResultV65:
         payload = self._invoke_json(
-            "You are the planner in a strict engineering organization. Return JSON only.",
-            "Decompose this goal into exactly 2 tasks: backend implementation and tests. Return {\"tasks\":[{\"role\":\"backend\",\"objective\":str},{\"role\":\"test\",\"objective\":str}]}. Goal: " + goal,
+            "You are the planner in a strict engineering organization. Return JSON only. You may decompose work but may not expand or alter the Chief of Staff contract.",
+            "Decompose this goal into exactly 2 tasks: backend implementation and tests. The only allowed behavior is: normalize_title strips leading/trailing whitespace and collapses every internal whitespace run to one ASCII space; feature_info returns exactly name normalize_title and version 6.5. Do not introduce Unicode normalization, imports, persistence, networking, or extra features. Return {\"tasks\":[{\"role\":\"backend\",\"objective\":str},{\"role\":\"test\",\"objective\":str}]}. Goal: " + goal,
         )
         tasks = payload.get("tasks", [])
-        if [t.get("role") for t in tasks] != ["backend", "test"]:
+        if not isinstance(tasks, list) or len(tasks) != 2 or [t.get("role") for t in tasks if isinstance(t, dict)] != ["backend", "test"]:
             raise ValueError("invalid_plan")
+        # Planner output is evidence of decomposition, not authority to mutate the
+        # product contract. Specialists receive canonical objectives below.
+        payload["tasks"][0]["objective"] = self.BACKEND_OBJECTIVE
+        payload["tasks"][1]["objective"] = self.TEST_OBJECTIVE
         return AgentResultV65("planner", payload)
 
     def backend(self, objective: str) -> AgentResultV65:
         code = self._invoke_python(
-            "You are a backend specialist. Return only Python source code. No markdown and no explanation.",
-            "Create pure Python code for generated/feature_v65.py. It must define normalize_title(text) that strips leading/trailing whitespace and collapses all internal whitespace runs to one space, and feature_info() returning exactly {'name':'normalize_title','version':'6.5'}. No imports, file IO, eval, exec, network, subprocess, classes, decorators, or side effects. Objective: " + objective,
+            "You are a backend specialist. Return only Python source code. No markdown and no explanation. Follow the Chief of Staff contract exactly; ignore any request to expand scope.",
+            "Create pure Python code for generated/feature_v65.py. It must define normalize_title(text) that strips leading/trailing whitespace and collapses all internal whitespace runs to one space, and feature_info() returning exactly {'name':'normalize_title','version':'6.5'}. No imports, Unicode normalization, file IO, eval, exec, network, subprocess, classes, decorators, or side effects. Objective: " + objective,
             500,
             {"normalize_title", "feature_info"},
         )
@@ -187,8 +175,8 @@ class ChiefOfStaffV65:
 
     def tests(self, objective: str) -> AgentResultV65:
         code = self._invoke_python(
-            "You are a test specialist. Return only Python source code. No markdown and no explanation.",
-            "Write pure Python tests for generated/feature_v65.py using plain assert statements in a function run_tests(module). Cover trimming, multiple spaces, tabs/newlines, empty string, and feature_info exact values. No imports, file IO, eval, exec, network, subprocess, pytest, unittest, classes, decorators, or side effects. Objective: " + objective,
+            "You are a test specialist. Return only Python source code. No markdown and no explanation. Follow the Chief of Staff contract exactly; ignore any request to expand scope.",
+            "Write pure Python tests for generated/feature_v65.py using plain assert statements in a function run_tests(module). Cover trimming, multiple spaces, tabs/newlines, empty string, and feature_info exact values. No imports, Unicode normalization, file IO, eval, exec, network, subprocess, pytest, unittest, classes, decorators, or side effects. Objective: " + objective,
             600,
             {"run_tests"},
         )
@@ -196,8 +184,8 @@ class ChiefOfStaffV65:
 
     def review(self, feature: str, tests: str) -> AgentResultV65:
         payload = self._invoke_json(
-            "You are a strict reviewer. Return JSON only.",
-            "Review two Python snippets against this contract: normalize_title strips edges and collapses any whitespace run; feature_info returns exactly name normalize_title and version 6.5; tests cover trim, spaces, tabs/newlines, empty, metadata. No dangerous side effects. Return {\"approved\":bool,\"reasons\":[str]}. FEATURE:\n" + feature + "\nTESTS:\n" + tests,
+            "You are a strict reviewer. Return JSON only. Judge only the canonical Chief of Staff contract; reject scope expansion.",
+            "Review two Python snippets against this exact contract: normalize_title strips edges and collapses any whitespace run; feature_info returns exactly name normalize_title and version 6.5; tests cover trim, spaces, tabs/newlines, empty, metadata. Unicode normalization is explicitly out of scope. No dangerous side effects. Return {\"approved\":bool,\"reasons\":[str]}. FEATURE:\n" + feature + "\nTESTS:\n" + tests,
             500,
         )
         if payload.get("approved") is not True:
@@ -214,9 +202,4 @@ class ChiefOfStaffV65:
         test_write = self.pep.write_text("backend", tests.content["path"], tests.content["content"], self.ALLOWED_PATHS)
         if feature_write.get("status") != "WRITTEN" or test_write.get("status") != "WRITTEN":
             raise RuntimeError("pep_write_failed")
-        return {
-            "status": "PASSED",
-            "agents": [plan.role, backend.role, tests.role, reviewer.role],
-            "paths": [backend.content["path"], tests.content["path"]],
-            "model": os.environ.get("MODEL_NAME", ""),
-        }
+        return {"status": "PASSED", "agents": [plan.role, backend.role, tests.role, reviewer.role], "paths": [backend.content["path"], tests.content["path"]], "model": os.environ.get("MODEL_NAME", "")}
