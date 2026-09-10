@@ -107,6 +107,21 @@ class ChiefOfStaffV65:
             raise ValueError("invalid_python_source") from last_syntax
         raise ValueError("missing_required_function")
 
+    @staticmethod
+    def _test_contract_ok(code: str) -> bool:
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return False
+        run_tests = next((node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "run_tests"), None)
+        if run_tests is None:
+            return False
+        assert_count = sum(isinstance(node, ast.Assert) for node in ast.walk(run_tests))
+        if assert_count < 5:
+            return False
+        required_tokens = ("normalize_title", "feature_info", "\\t", "\\n", "6.5")
+        return all(token in code for token in required_tokens)
+
     def _provider_text(self, system: str, user: str, max_tokens: int) -> str:
         response = self.provider.invoke(ProviderRequestV61(system=system, user=user, temperature=0, max_tokens=max_tokens))
         if not response.ok:
@@ -167,17 +182,32 @@ class ChiefOfStaffV65:
 
     def tests(self, objective: str) -> AgentResultV65:
         model_generated = False
+        fallback_reason = None
         try:
-            code = self._invoke_python(
+            candidate = self._invoke_python(
                 "You are a test specialist. Return only Python source code. No markdown and no explanation. Emit def run_tests(module): immediately. Follow the Chief of Staff contract exactly.",
-                "Write pure Python tests using plain assert in run_tests(module). Required checks: trim edges, collapse spaces, collapse tabs/newlines, empty input, and exact feature_info metadata. No imports or side effects. Objective: " + objective,
+                "Write pure Python tests using plain assert in run_tests(module). Required checks: trim edges, collapse spaces, collapse tabs/newlines, empty input, and exact feature_info metadata. Include at least five assert statements. No imports or side effects. Objective: " + objective,
                 4000,
                 {"run_tests"},
             )
+            if not self._test_contract_ok(candidate):
+                raise ValueError("insufficient_test_contract")
+            code = candidate
             model_generated = True
-        except RuntimeError:
+        except (RuntimeError, ValueError) as exc:
+            fallback_reason = type(exc).__name__
             code = self._validate_python(self.CANONICAL_TESTS, {"run_tests"})
-        return AgentResultV65("test", {"path": self.ALLOWED_PATHS[1], "content": code, "model_generated": model_generated})
+            if not self._test_contract_ok(code):
+                raise RuntimeError("canonical_test_contract_invalid")
+        return AgentResultV65(
+            "test",
+            {
+                "path": self.ALLOWED_PATHS[1],
+                "content": code,
+                "model_generated": model_generated,
+                "fallback_reason": fallback_reason,
+            },
+        )
 
     def review(self, feature: str, tests: str) -> AgentResultV65:
         advisory_received = False
@@ -217,6 +247,7 @@ class ChiefOfStaffV65:
             "agents": [plan.role, backend.role, tests.role, reviewer.role],
             "planner_advisory_received": plan.content["advisory_received"],
             "test_model_generated": tests.content["model_generated"],
+            "test_fallback_reason": tests.content["fallback_reason"],
             "reviewer_advisory_received": reviewer.content["advisory_received"],
             "reviewer_approved": reviewer.content["approved"],
             "paths": [backend.content["path"], tests.content["path"]],
