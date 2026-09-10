@@ -2,10 +2,25 @@ name: v61-real-provider
 on:
   pull_request:
   push:
-    branches: [main]
+    branches:
+      - main
+      - release/v6.3-strict-provider-gate
+  workflow_dispatch:
 
 jobs:
-  test:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --upgrade pip pytest
+      - name: Unit tests
+        run: python -m pytest tests/test_v61_real_provider.py -q
+
+  real-provider-smoke:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     env:
       MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
@@ -16,8 +31,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install --upgrade pip pytest
-      - name: Unit tests
-        run: python -m pytest tests/test_v61_real_provider.py -q
+      - name: Preflight model configuration
+        shell: bash
+        run: |
+          test -n "$MODEL_API_KEY" || { echo 'MODEL_API_KEY is missing'; exit 20; }
+          test -n "$MODEL_BASE_URL" || { echo 'MODEL_BASE_URL is missing'; exit 21; }
+          test -n "$MODEL_NAME" || { echo 'MODEL_NAME is missing'; exit 22; }
       - name: Strict real-provider smoke test
         run: python -m real_provider.strict_smoke_v63
