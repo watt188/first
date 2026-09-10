@@ -1,0 +1,40 @@
+name: v71-autonomous-delivery
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+  MODEL_BASE_URL: ${{ secrets.MODEL_BASE_URL }}
+  MODEL_NAME: ${{ secrets.MODEL_NAME }}
+  GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+
+jobs:
+  autonomous-delivery:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install tests
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Run V7.1 deterministic tests
+        run: python -m pytest -q tests/test_autonomous_delivery_v71.py
+      - name: Run real autonomous delivery
+        run: python -m autonomous_delivery.v71 "Ship a safe title-normalization utility with independent tests and reviewer approval."
+      - name: Verify V7.1 evidence
+        run: python -m evidence_integrity.v69 verify --manifest artifacts/v71-evidence-manifest.json --source-sha "$GITHUB_HEAD_SHA"
+      - name: Upload V7.1 evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v71-autonomous-delivery-evidence
+          path: |
+            artifacts/v71-autonomous-delivery.json
+            artifacts/v71-evidence-manifest.json
+            generated/feature_v65.py
+            generated/test_feature_v65.py
