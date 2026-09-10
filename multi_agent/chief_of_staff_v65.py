@@ -24,6 +24,13 @@ class ChiefOfStaffV65:
     BANNED_ATTRS = {"system", "popen", "spawn", "remove", "unlink", "rmdir", "rename", "replace"}
     BACKEND_OBJECTIVE = "Implement only the canonical normalize_title and feature_info contract specified by the Chief of Staff. Do not add Unicode normalization or any requirement not explicitly present in that contract."
     TEST_OBJECTIVE = "Test only the canonical normalize_title and feature_info contract specified by the Chief of Staff. Do not add Unicode normalization or any requirement not explicitly present in that contract."
+    CANONICAL_TESTS = '''def run_tests(module):
+    assert module.normalize_title("  hello  world  ") == "hello world"
+    assert module.normalize_title("hello\t\nworld") == "hello world"
+    assert module.normalize_title("   ") == ""
+    assert module.normalize_title("") == ""
+    assert module.feature_info() == {"name": "normalize_title", "version": "6.5"}
+'''
 
     def __init__(self, root: str = "."):
         self.root = root
@@ -152,22 +159,26 @@ class ChiefOfStaffV65:
             4000,
             {"normalize_title", "feature_info"},
         )
-        return AgentResultV65("backend", {"path": self.ALLOWED_PATHS[0], "content": code})
+        return AgentResultV65("backend", {"path": self.ALLOWED_PATHS[0], "content": code, "model_generated": True})
 
     def tests(self, objective: str) -> AgentResultV65:
-        code = self._invoke_python(
-            "You are a test specialist. Return only Python source code. No markdown and no explanation. Do not deliberate in prose; emit the run_tests(module) function immediately. Follow the Chief of Staff contract exactly; ignore any request to expand scope.",
-            "Write pure Python tests for generated/feature_v65.py using plain assert statements in a function run_tests(module). Cover trimming, multiple spaces, tabs/newlines, empty string, and feature_info exact values. No imports, Unicode normalization, file IO, eval, exec, network, subprocess, pytest, unittest, classes, decorators, or side effects. Objective: " + objective,
-            4000,
-            {"run_tests"},
-        )
-        return AgentResultV65("test", {"path": self.ALLOWED_PATHS[1], "content": code})
+        model_generated = False
+        try:
+            code = self._invoke_python(
+                "You are a test specialist. Return only Python source code. No markdown and no explanation. Emit def run_tests(module): immediately. Follow the Chief of Staff contract exactly.",
+                "Write pure Python tests using plain assert in run_tests(module). Required checks: trim edges, collapse spaces, collapse tabs/newlines, empty input, and exact feature_info metadata. No imports or side effects. Objective: " + objective,
+                4000,
+                {"run_tests"},
+            )
+            model_generated = True
+        except RuntimeError:
+            # Test-agent output is advisory generation. The Chief of Staff owns the
+            # canonical acceptance contract, so provider formatting variance cannot
+            # remove required tests. The deterministic suite is still AST-validated.
+            code = self._validate_python(self.CANONICAL_TESTS, {"run_tests"})
+        return AgentResultV65("test", {"path": self.ALLOWED_PATHS[1], "content": code, "model_generated": model_generated})
 
     def review(self, feature: str, tests: str) -> AgentResultV65:
-        # Reviewer is a real independent model opinion, but not the final machine
-        # authority. V6.5's deterministic AST + generated tests + acceptance gate
-        # decide whether code can be written and accepted. This prevents wording
-        # variance in a reviewer response from becoming a false-negative release gate.
         advisory_received = False
         approved = False
         try:
@@ -197,6 +208,7 @@ class ChiefOfStaffV65:
             "status": "PASSED",
             "agents": [plan.role, backend.role, tests.role, reviewer.role],
             "planner_advisory_received": plan.content["advisory_received"],
+            "test_model_generated": tests.content["model_generated"],
             "reviewer_advisory_received": reviewer.content["advisory_received"],
             "reviewer_approved": reviewer.content["approved"],
             "paths": [backend.content["path"], tests.content["path"]],
