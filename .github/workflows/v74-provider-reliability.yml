@@ -1,0 +1,19 @@
+name: v74-provider-reliability
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  provider-reliability:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --disable-pip-version-check pytest
+      - name: Run V7.4 circuit recovery regression
+        run: python -m pytest -q tests/test_provider_recovery_v74.py tests/test_provider_resilience_v67.py
