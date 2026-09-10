@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from autonomous_delivery.v71 import AutonomousDeliveryV71
+from evidence_integrity.v69 import verify_manifest
 
 
 class FakeChief:
@@ -46,6 +47,12 @@ def test_delivery_produces_commit_bound_verified_evidence(tmp_path, monkeypatch)
     paths = [entry["path"] for entry in payload["entries"]]
     assert paths == sorted(paths)
     assert "artifacts/v71-autonomous-delivery.json" in paths
+    assert verify_manifest(tmp_path, payload, "abc1234567890")["status"] == "PASSED"
+
+    persisted_report = json.loads((tmp_path / "artifacts/v71-autonomous-delivery.json").read_text(encoding="utf-8"))
+    assert persisted_report["evidence_status"] == "SEALED_AND_VERIFIED"
+    assert persisted_report["evidence_manifest"] == "artifacts/v71-evidence-manifest.json"
+    assert "evidence" not in persisted_report
 
 
 def test_missing_outputs_fail_closed(tmp_path, monkeypatch):
