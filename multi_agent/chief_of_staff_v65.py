@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 import time
@@ -38,20 +39,34 @@ class ChiefOfStaffV65:
             if lines and lines[-1].strip() == "```":
                 lines = lines[:-1]
             text = "\n".join(lines).strip()
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            start = text.find("{")
-            end = text.rfind("}")
-            if start < 0 or end <= start:
-                raise ValueError("invalid_json_response")
+
+        candidates = [text]
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            extracted = text[start:end + 1]
+            if extracted != text:
+                candidates.append(extracted)
+
+        for candidate in candidates:
             try:
-                payload = json.loads(text[start:end + 1])
-            except json.JSONDecodeError as exc:
-                raise ValueError("invalid_json_response") from exc
-        if not isinstance(payload, dict):
-            raise ValueError("json_response_not_object")
-        return payload
+                payload = json.loads(candidate)
+                if isinstance(payload, dict):
+                    return payload
+            except json.JSONDecodeError:
+                pass
+
+            # Some OpenAI-compatible reasoning models emit Python-literal-like
+            # objects with single quotes. literal_eval is non-executing and we
+            # still require a plain dict before any downstream schema checks.
+            try:
+                payload = ast.literal_eval(candidate)
+                if isinstance(payload, dict):
+                    return payload
+            except (ValueError, SyntaxError):
+                pass
+
+        raise ValueError("invalid_json_response")
 
     def _invoke_json(self, system: str, user: str, max_tokens: int = 700) -> dict[str, Any]:
         last_error: Exception | None = None
