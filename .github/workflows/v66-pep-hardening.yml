@@ -1,0 +1,19 @@
+name: v66-pep-hardening
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pep-hardening:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run V6.6 PEP hardening tests
+        run: python -m pytest -q tests/test_pep_v66.py
