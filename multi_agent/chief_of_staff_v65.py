@@ -21,6 +21,8 @@ class ChiefOfStaffV65:
 
     ALLOWED_PATHS = ("generated/feature_v65.py", "generated/test_feature_v65.py")
     MAX_ATTEMPTS = 3
+    BANNED_NAMES = {"open", "eval", "exec", "compile", "__import__", "input"}
+    BANNED_ATTRS = {"system", "popen", "spawn", "remove", "unlink", "rmdir", "rename", "replace"}
 
     def __init__(self, root: str = "."):
         self.root = root
@@ -44,7 +46,6 @@ class ChiefOfStaffV65:
         text = cls._strip_fence(content)
         if not text:
             raise ValueError("empty_model_response")
-
         candidates = [text]
         start = text.find("{")
         end = text.rfind("}")
@@ -52,7 +53,6 @@ class ChiefOfStaffV65:
             extracted = text[start:end + 1]
             if extracted != text:
                 candidates.append(extracted)
-
         for candidate in candidates:
             try:
                 payload = json.loads(candidate)
@@ -66,22 +66,77 @@ class ChiefOfStaffV65:
                     return payload
             except (ValueError, SyntaxError):
                 pass
-
         raise ValueError("invalid_json_response")
+
+    @staticmethod
+    def _python_candidates(content: str) -> list[str]:
+        text = (content or "").strip()
+        if not text:
+            return []
+        candidates: list[str] = []
+        # Prefer fenced code wherever it appears. Reasoning-capable providers can
+        # prepend analysis even when instructed to return source only.
+        parts = text.split("```")
+        for index in range(1, len(parts), 2):
+            block = parts[index].strip()
+            if block.lower().startswith("python"):
+                block = block[6:].lstrip("\r\n ")
+            elif block.lower().startswith("py"):
+                block = block[2:].lstrip("\r\n ")
+            if block:
+                candidates.append(block)
+        candidates.append(text)
+        # Deduplicate while preserving preference order.
+        return list(dict.fromkeys(candidates))
+
+    @classmethod
+    def _validate_python(cls, content: str, required_functions: set[str]) -> str:
+        last_syntax: SyntaxError | None = None
+        for candidate in cls._python_candidates(content):
+            try:
+                tree = ast.parse(candidate)
+            except SyntaxError as exc:
+                last_syntax = exc
+                continue
+            found = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+            if not required_functions.issubset(found):
+                continue
+            # Generated artifacts are intentionally tiny and pure. Reject imports,
+            # classes and executable top-level statements before any execution.
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                    continue
+                raise ValueError("unsafe_top_level_statement")
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Import, ast.ImportFrom, ast.ClassDef, ast.AsyncFunctionDef, ast.Lambda, ast.With, ast.AsyncWith)):
+                    raise ValueError("banned_python_construct")
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in cls.BANNED_NAMES:
+                    raise ValueError("banned_python_call")
+                if isinstance(node, ast.Attribute) and node.attr in cls.BANNED_ATTRS:
+                    raise ValueError("banned_python_attribute")
+            return candidate.strip() + "\n"
+        if last_syntax is not None:
+            raise ValueError("invalid_python_source") from last_syntax
+        raise ValueError("missing_required_function")
+
+    def _provider_text(self, system: str, user: str, max_tokens: int) -> str:
+        response = self.provider.invoke(
+            ProviderRequestV61(system=system, user=user, temperature=0, max_tokens=max_tokens)
+        )
+        if not response.ok:
+            raise RuntimeError(response.error or "provider_failed")
+        text = response.content or ""
+        if not text.strip():
+            raise ValueError("empty_model_response")
+        return text
 
     def _invoke_raw(self, system: str, user: str, max_tokens: int) -> str:
         last_error: Exception | None = None
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
-            response = self.provider.invoke(
-                ProviderRequestV61(system=system, user=user, temperature=0, max_tokens=max_tokens)
-            )
             try:
-                if not response.ok:
-                    raise RuntimeError(response.error or "provider_failed")
-                text = self._strip_fence(response.content)
-                if not text:
-                    raise ValueError("empty_model_response")
-                return text
+                return self._strip_fence(self._provider_text(system, user, max_tokens))
             except (RuntimeError, ValueError) as exc:
                 last_error = exc
                 if attempt < self.MAX_ATTEMPTS:
@@ -92,13 +147,24 @@ class ChiefOfStaffV65:
         last_error: Exception | None = None
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             try:
-                text = self._invoke_raw(system, user, max_tokens)
-                return self._decode_json_object(text)
+                return self._decode_json_object(self._provider_text(system, user, max_tokens))
             except (RuntimeError, ValueError) as exc:
                 last_error = exc
                 if attempt < self.MAX_ATTEMPTS:
                     time.sleep(0.5 * attempt)
         raise RuntimeError(f"model_json_failed_after_{self.MAX_ATTEMPTS}_attempts:{type(last_error).__name__}") from last_error
+
+    def _invoke_python(self, system: str, user: str, max_tokens: int, required_functions: set[str]) -> str:
+        last_error: Exception | None = None
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            try:
+                raw = self._provider_text(system, user, max_tokens)
+                return self._validate_python(raw, required_functions)
+            except (RuntimeError, ValueError) as exc:
+                last_error = exc
+                if attempt < self.MAX_ATTEMPTS:
+                    time.sleep(0.5 * attempt)
+        raise RuntimeError(f"model_python_failed_after_{self.MAX_ATTEMPTS}_attempts:{type(last_error).__name__}") from last_error
 
     def plan(self, goal: str) -> AgentResultV65:
         payload = self._invoke_json(
@@ -111,21 +177,21 @@ class ChiefOfStaffV65:
         return AgentResultV65("planner", payload)
 
     def backend(self, objective: str) -> AgentResultV65:
-        code = self._invoke_raw(
+        code = self._invoke_python(
             "You are a backend specialist. Return only Python source code. No markdown and no explanation.",
             "Create pure Python code for generated/feature_v65.py. It must define normalize_title(text) that strips leading/trailing whitespace and collapses all internal whitespace runs to one space, and feature_info() returning exactly {'name':'normalize_title','version':'6.5'}. No imports, file IO, eval, exec, network, subprocess, classes, decorators, or side effects. Objective: " + objective,
             500,
+            {"normalize_title", "feature_info"},
         )
-        ast.parse(code)
         return AgentResultV65("backend", {"path": self.ALLOWED_PATHS[0], "content": code})
 
     def tests(self, objective: str) -> AgentResultV65:
-        code = self._invoke_raw(
+        code = self._invoke_python(
             "You are a test specialist. Return only Python source code. No markdown and no explanation.",
             "Write pure Python tests for generated/feature_v65.py using plain assert statements in a function run_tests(module). Cover trimming, multiple spaces, tabs/newlines, empty string, and feature_info exact values. No imports, file IO, eval, exec, network, subprocess, pytest, unittest, classes, decorators, or side effects. Objective: " + objective,
             600,
+            {"run_tests"},
         )
-        ast.parse(code)
         return AgentResultV65("test", {"path": self.ALLOWED_PATHS[1], "content": code})
 
     def review(self, feature: str, tests: str) -> AgentResultV65:
