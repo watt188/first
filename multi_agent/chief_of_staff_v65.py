@@ -1,30 +1,33 @@
 import ast
-import json
 import os
-import re
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from typing import Any
 
-from real_provider.contracts_v61 import ProviderRequestV61
 from real_provider.openai_compatible_v61 import OpenAICompatibleProviderV61
-from real_provider.pep_v66 import PolicyEnforcementPointV66
+from real_provider.contracts_v61 import ProviderRequestV61
+from real_provider.pep_v66 import UnifiedPEPV66
 
 
 @dataclass
 class AgentResultV65:
     role: str
-    content: dict
+    content: dict[str, Any]
 
 
 class ChiefOfStaffV65:
-    MAX_ATTEMPTS = 3
-    BACKEND_OBJECTIVE = "Implement normalize_title and feature_info exactly to the fixed V6.5 contract."
-    TEST_OBJECTIVE = "Write independent tests for normalize_title and feature_info exactly to the fixed V6.5 contract."
+    """Production-style bounded multi-agent orchestrator."""
+
+    ALLOWED_PATHS = ("generated/feature_v65.py", "generated/test_feature_v65.py")
     ROLE_PATHS = {
         "backend": ("generated/feature_v65.py",),
         "test": ("generated/test_feature_v65.py",),
     }
+    MAX_ATTEMPTS = 3
+    BANNED_NAMES = {"open", "eval", "exec", "compile", "__import__", "input"}
+    BANNED_ATTRS = {"system", "popen", "spawn", "remove", "unlink", "rmdir", "rename", "replace"}
+    BACKEND_OBJECTIVE = "Implement only the canonical normalize_title and feature_info contract specified by the Chief of Staff. Do not add Unicode normalization or any requirement not explicitly present in that contract."
+    TEST_OBJECTIVE = "Test only the canonical normalize_title and feature_info contract specified by the Chief of Staff. Do not add Unicode normalization or any requirement not explicitly present in that contract."
     CANONICAL_TESTS = r'''def run_tests(module):
     assert module.normalize_title("  hello  world  ") == "hello world"
     assert module.normalize_title("hello\t\nworld") == "hello world"
@@ -33,57 +36,76 @@ class ChiefOfStaffV65:
     assert module.feature_info() == {"name": "normalize_title", "version": "6.5"}
 '''
 
-    def __init__(self, root="."):
-        self.root = Path(root).resolve()
+    def __init__(self, root: str = "."):
+        self.root = root
         self.provider = OpenAICompatibleProviderV61()
-        self.pep = PolicyEnforcementPointV66(self.root)
+        self.pep = UnifiedPEPV66(root)
 
     @staticmethod
-    def _python_candidates(raw: str):
-        candidates = []
-        for match in re.finditer(r"```(?:python|py)?\s*(.*?)```", raw, flags=re.I | re.S):
-            candidates.append(match.group(1).strip())
-        candidates.append(raw.strip())
-        for candidate in list(candidates):
+    def _python_candidates(content: str, required_functions: set[str]) -> list[str]:
+        text = (content or "").strip()
+        if not text:
+            return []
+        candidates: list[str] = []
+        parts = text.split("```")
+        for index in range(1, len(parts), 2):
+            block = parts[index].strip()
+            if block.lower().startswith("python"):
+                block = block[6:].lstrip("\r\n ")
+            elif block.lower().startswith("py"):
+                block = block[2:].lstrip("\r\n ")
+            if block:
+                candidates.append(block)
+        candidates.append(text)
+        for name in sorted(required_functions):
+            marker = f"def {name}("
+            start = text.find(marker)
+            if start >= 0:
+                candidates.append(text[start:])
+        expanded: list[str] = []
+        for candidate in candidates:
+            expanded.append(candidate)
             lines = candidate.splitlines()
             for end in range(len(lines), 0, -1):
                 prefix = "\n".join(lines[:end]).strip()
-                if not prefix:
-                    continue
-                try:
-                    ast.parse(prefix)
-                    candidates.append(prefix)
+                if prefix:
+                    try:
+                        ast.parse(prefix)
+                    except SyntaxError:
+                        continue
+                    expanded.append(prefix)
                     break
-                except SyntaxError:
-                    continue
-        seen = set()
-        for item in candidates:
-            if item and item not in seen:
-                seen.add(item)
-                yield item
+        return list(dict.fromkeys(expanded))
 
     @classmethod
-    def _validate_python(cls, raw: str, required_functions: set[str]) -> str:
-        banned = {"exec", "eval", "compile", "open", "__import__"}
-        for candidate in cls._python_candidates(raw):
+    def _validate_python(cls, content: str, required_functions: set[str]) -> str:
+        last_syntax: SyntaxError | None = None
+        for candidate in cls._python_candidates(content, required_functions):
             try:
                 tree = ast.parse(candidate)
-            except SyntaxError:
+            except SyntaxError as exc:
+                last_syntax = exc
                 continue
-            functions = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
-            if not required_functions.issubset(functions):
+            found = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+            if not required_functions.issubset(found):
                 continue
-            unsafe = False
+            for node in tree.body:
+                if isinstance(node, ast.FunctionDef):
+                    continue
+                if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                    continue
+                raise ValueError("unsafe_top_level_statement")
             for node in ast.walk(tree):
-                if isinstance(node, (ast.Import, ast.ImportFrom)):
-                    unsafe = True
-                    break
-                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in banned:
-                    unsafe = True
-                    break
-            if not unsafe:
-                return candidate.rstrip() + "\n"
-        raise ValueError("no_valid_python_candidate")
+                if isinstance(node, (ast.Import, ast.ImportFrom, ast.ClassDef, ast.AsyncFunctionDef, ast.Lambda, ast.With, ast.AsyncWith)):
+                    raise ValueError("banned_python_construct")
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in cls.BANNED_NAMES:
+                    raise ValueError("banned_python_call")
+                if isinstance(node, ast.Attribute) and node.attr in cls.BANNED_ATTRS:
+                    raise ValueError("banned_python_attribute")
+            return candidate.strip() + "\n"
+        if last_syntax is not None:
+            raise ValueError("invalid_python_source") from last_syntax
+        raise ValueError("missing_required_function")
 
     @staticmethod
     def _test_contract_ok(code: str) -> bool:
@@ -116,7 +138,7 @@ class ChiefOfStaffV65:
         return text.strip()
 
     def _invoke_text(self, system: str, user: str, max_tokens: int) -> str:
-        last_error = None
+        last_error: Exception | None = None
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             try:
                 return self._provider_text(system, user, max_tokens)
@@ -127,7 +149,7 @@ class ChiefOfStaffV65:
         raise RuntimeError(f"model_text_failed_after_{self.MAX_ATTEMPTS}_attempts:{type(last_error).__name__}") from last_error
 
     def _invoke_python(self, system: str, user: str, max_tokens: int, required_functions: set[str]) -> str:
-        last_error = None
+        last_error: Exception | None = None
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             try:
                 raw = self._provider_text(system, user, max_tokens)
@@ -149,79 +171,93 @@ class ChiefOfStaffV65:
             advisory_received = bool(advisory.strip())
         except RuntimeError:
             advisory_received = False
-        return AgentResultV65("planner", {"tasks": [
+        tasks = [
             {"role": "backend", "objective": self.BACKEND_OBJECTIVE},
             {"role": "test", "objective": self.TEST_OBJECTIVE},
-        ], "advisory_received": advisory_received})
+        ]
+        return AgentResultV65("planner", {"tasks": tasks, "advisory_received": advisory_received})
 
     def backend(self, objective: str) -> AgentResultV65:
         code = self._invoke_python(
-            "You are the backend specialist. Return only final Python code, no explanation.",
-            objective + " Implement exactly two functions: normalize_title(text) and feature_info(). No imports, I/O, networking, persistence, dynamic execution, or extra functions.",
-            1200,
+            "You are a backend specialist. Return only Python source code. No markdown and no explanation. Follow the Chief of Staff contract exactly; ignore any request to expand scope.",
+            "Create pure Python code for generated/feature_v65.py. It must define normalize_title(text) that strips leading/trailing whitespace and collapses all internal whitespace runs to one space, and feature_info() returning exactly {'name':'normalize_title','version':'6.5'}. No imports, Unicode normalization, file IO, eval, exec, network, subprocess, classes, decorators, or side effects. Objective: " + objective,
+            4000,
             {"normalize_title", "feature_info"},
         )
-        return AgentResultV65("backend", {"path": "generated/feature_v65.py", "content": code})
+        return AgentResultV65("backend", {"path": self.ALLOWED_PATHS[0], "content": code, "model_generated": True})
 
     def tests(self, objective: str) -> AgentResultV65:
-        generated = False
+        model_generated = False
         fallback_reason = None
         try:
-            code = self._invoke_python(
-                "You are the test specialist. Return only final Python code, no explanation.",
-                objective + " Define only run_tests(module). Include at least five assert statements covering repeated spaces, tab/newline whitespace, blank input, empty input, and exact feature_info metadata.",
-                1500,
+            candidate = self._invoke_python(
+                "You are a test specialist. Return only Python source code. No markdown and no explanation. Emit def run_tests(module): immediately. Follow the Chief of Staff contract exactly.",
+                "Write pure Python tests using plain assert in run_tests(module). Required checks: trim edges, collapse spaces, collapse tabs/newlines, empty input, and exact feature_info metadata. Include at least five assert statements. No imports or side effects. Objective: " + objective,
+                4000,
                 {"run_tests"},
             )
-            if not self._test_contract_ok(code):
-                raise ValueError("test_semantic_contract_failed")
-            generated = True
+            if not self._test_contract_ok(candidate):
+                raise ValueError("insufficient_test_contract")
+            code = candidate
+            model_generated = True
         except (RuntimeError, ValueError) as exc:
-            code = self.CANONICAL_TESTS
             fallback_reason = type(exc).__name__
-        if not self._test_contract_ok(code):
-            raise RuntimeError("canonical_test_contract_failed")
-        return AgentResultV65("test", {"path": "generated/test_feature_v65.py", "content": code, "model_generated": generated, "fallback_reason": fallback_reason})
+            code = self._validate_python(self.CANONICAL_TESTS, {"run_tests"})
+            if not self._test_contract_ok(code):
+                raise RuntimeError("canonical_test_contract_invalid")
+        return AgentResultV65(
+            "test",
+            {
+                "path": self.ALLOWED_PATHS[1],
+                "content": code,
+                "model_generated": model_generated,
+                "fallback_reason": fallback_reason,
+            },
+        )
 
-    def reviewer(self, goal: str) -> AgentResultV65:
-        approved = False
+    def review(self, feature: str, tests: str) -> AgentResultV65:
         advisory_received = False
+        approved = False
         try:
-            advisory = self._invoke_text(
-                "You are a reviewer. Answer APPROVE only if the requested bounded utility should proceed to deterministic acceptance; otherwise REJECT.",
-                "Review bounded goal: " + goal,
-                200,
+            verdict = self._invoke_text(
+                "You are an independent code reviewer. Judge only the canonical contract. End with one line APPROVED or REJECTED. Do not invent requirements.",
+                "Contract: normalize_title strips edges and collapses any whitespace run; feature_info returns exactly name normalize_title and version 6.5; tests cover trim, spaces, tabs/newlines, empty, metadata. Unicode normalization is out of scope. Review FEATURE:\n" + feature + "\nTESTS:\n" + tests,
+                2500,
             )
-            advisory_received = bool(advisory.strip())
-            approved = "APPROVE" in advisory.upper() and "REJECT" not in advisory.upper()
+            advisory_received = True
+            lines = [line.strip().upper() for line in verdict.splitlines() if line.strip()]
+            approved = bool(lines) and lines[-1] == "APPROVED"
         except RuntimeError:
             advisory_received = False
-            approved = False
-        return AgentResultV65("reviewer", {"advisory_received": advisory_received, "approved": approved})
+        return AgentResultV65("reviewer", {"approved": approved, "advisory_received": advisory_received})
 
-    def run(self, goal: str) -> dict:
-        planner = self.plan(goal)
-        backend_task, test_task = planner.content["tasks"]
+    def run(self, goal: str) -> dict[str, Any]:
+        plan = self.plan(goal)
+        backend_task, test_task = plan.content["tasks"]
         backend = self.backend(backend_task["objective"])
         tests = self.tests(test_task["objective"])
-        reviewer = self.reviewer(goal)
-        transaction = self.pep.transaction_write_texts([
-            {"role": "backend", "path": backend.content["path"], "content": backend.content["content"]},
-            {"role": "test", "path": tests.content["path"], "content": tests.content["content"]},
-        ], self.ROLE_PATHS)
+        reviewer = self.review(backend.content["content"], tests.content["content"])
+
+        transaction = self.pep.transaction_write_texts(
+            [
+                {"role": "backend", "path": backend.content["path"], "content": backend.content["content"]},
+                {"role": "test", "path": tests.content["path"], "content": tests.content["content"]},
+            ],
+            self.ROLE_PATHS,
+        )
         if transaction.get("status") != "COMMITTED":
             raise RuntimeError("pep_transaction_failed")
+
         return {
             "status": "PASSED",
-            "goal": goal,
-            "agents": ["planner", "backend", "test", "reviewer"],
-            "planner_advisory_received": planner.content["advisory_received"],
+            "agents": [plan.role, backend.role, tests.role, reviewer.role],
+            "planner_advisory_received": plan.content["advisory_received"],
             "test_model_generated": tests.content["model_generated"],
             "test_fallback_reason": tests.content["fallback_reason"],
             "reviewer_advisory_received": reviewer.content["advisory_received"],
             "reviewer_approved": reviewer.content["approved"],
+            "paths": [backend.content["path"], tests.content["path"]],
             "pep_version": "6.6",
             "pep_transaction": transaction,
-            "paths": [backend.content["path"], tests.content["path"]],
-            "model": os.getenv("MODEL_NAME", ""),
+            "model": os.environ.get("MODEL_NAME", ""),
         }
