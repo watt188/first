@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from evidence_integrity.v69 import build_manifest, seal, verify_manifest
+from evidence_integrity.v69 import build_manifest, main, seal, verify_manifest
 
 
 def _write(root: Path, rel: str, text: str) -> None:
@@ -58,3 +58,26 @@ def test_seal_writes_verifiable_manifest(tmp_path):
     seal(tmp_path, ["a.txt"], out, "abcdef1234567890")
     manifest = json.loads(out.read_text(encoding="utf-8"))
     assert verify_manifest(tmp_path, manifest, "abcdef1234567890")["status"] == "PASSED"
+
+
+def test_cli_accepts_options_between_mode_and_files(tmp_path, capsys):
+    _write(tmp_path, "artifacts/a.json", '{"ok":true}')
+    _write(tmp_path, "generated/x.py", "x = 1\n")
+    manifest = tmp_path / "artifacts" / "manifest.json"
+    main([
+        "seal",
+        "--root", str(tmp_path),
+        "--manifest", str(manifest),
+        "--source-sha", "abcdef1234567890",
+        "artifacts/a.json",
+        "generated/x.py",
+    ])
+    assert manifest.is_file()
+    assert json.loads(capsys.readouterr().out)["status"] == "SEALED"
+    main([
+        "verify",
+        "--root", str(tmp_path),
+        "--manifest", str(manifest),
+        "--source-sha", "abcdef1234567890",
+    ])
+    assert json.loads(capsys.readouterr().out)["status"] == "PASSED"
