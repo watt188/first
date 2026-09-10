@@ -122,14 +122,21 @@ def seal(root: str | Path, files: Iterable[str], output: str | Path, source_sha:
     return manifest
 
 
-def main() -> None:
+def _parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("seal", "verify"))
     parser.add_argument("--root", default=".")
     parser.add_argument("--manifest", default="artifacts/v69-evidence-manifest.json")
     parser.add_argument("--source-sha", default=os.getenv("EVIDENCE_SOURCE_SHA", ""))
     parser.add_argument("files", nargs="*")
-    args = parser.parse_args()
+    parse = getattr(parser, "parse_intermixed_args", None)
+    if parse is not None:
+        return parse(argv)
+    return parser.parse_args(argv)
+
+
+def main(argv=None) -> None:
+    args = _parse_args(argv)
     if args.mode == "seal":
         if not args.files:
             raise SystemExit("no_evidence_files")
