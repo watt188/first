@@ -1,0 +1,26 @@
+name: v64-real-codegen
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  real-codegen-e2e:
+    runs-on: ubuntu-latest
+    env:
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+      MODEL_BASE_URL: ${{ secrets.MODEL_BASE_URL }}
+      MODEL_NAME: ${{ secrets.MODEL_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Real model code generation through PEP
+        run: python -m real_provider.e2e_v64
+      - name: Upload generated acceptance artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: v64-real-codegen-evidence
+          path: runtime/v64/
+          if-no-files-found: error
