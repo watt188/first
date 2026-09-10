@@ -38,7 +38,10 @@ class OpenAICompatibleProviderV61:
             with urllib.request.urlopen(req,timeout=30) as resp:
                 body=json.loads(resp.read().decode("utf-8"))
             message=body["choices"][0]["message"]
-            content=message.get("content") or message.get("reasoning_content") or ""
+            # Only the assistant's final content is an executable/structured
+            # response. reasoning_content is an internal reasoning trace and can
+            # be truncated or non-JSON/non-code; never promote it to final output.
+            content=message.get("content") or ""
             return ProviderResponseV61(True,content=content,model=os.environ["MODEL_NAME"],latency_ms=int((time.time()-started)*1000))
         except Exception as e:
             return ProviderResponseV61(False,error=type(e).__name__,model=os.getenv("MODEL_NAME",""),latency_ms=int((time.time()-started)*1000))
