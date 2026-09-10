@@ -6,7 +6,7 @@ from typing import Any
 
 from real_provider.openai_compatible_v61 import OpenAICompatibleProviderV61
 from real_provider.contracts_v61 import ProviderRequestV61
-from real_provider.pep_v61 import UnifiedPEPV61
+from real_provider.pep_v66 import UnifiedPEPV66
 
 
 @dataclass
@@ -19,6 +19,10 @@ class ChiefOfStaffV65:
     """Production-style bounded multi-agent orchestrator."""
 
     ALLOWED_PATHS = ("generated/feature_v65.py", "generated/test_feature_v65.py")
+    ROLE_PATHS = {
+        "backend": ("generated/feature_v65.py",),
+        "test": ("generated/test_feature_v65.py",),
+    }
     MAX_ATTEMPTS = 3
     BANNED_NAMES = {"open", "eval", "exec", "compile", "__import__", "input"}
     BANNED_ATTRS = {"system", "popen", "spawn", "remove", "unlink", "rmdir", "rename", "replace"}
@@ -35,7 +39,7 @@ class ChiefOfStaffV65:
     def __init__(self, root: str = "."):
         self.root = root
         self.provider = OpenAICompatibleProviderV61()
-        self.pep = UnifiedPEPV61(root)
+        self.pep = UnifiedPEPV66(root)
 
     @staticmethod
     def _python_candidates(content: str, required_functions: set[str]) -> list[str]:
@@ -197,10 +201,17 @@ class ChiefOfStaffV65:
         backend = self.backend(backend_task["objective"])
         tests = self.tests(test_task["objective"])
         reviewer = self.review(backend.content["content"], tests.content["content"])
-        feature_write = self.pep.write_text("backend", backend.content["path"], backend.content["content"], self.ALLOWED_PATHS)
-        test_write = self.pep.write_text("backend", tests.content["path"], tests.content["content"], self.ALLOWED_PATHS)
-        if feature_write.get("status") != "WRITTEN" or test_write.get("status") != "WRITTEN":
-            raise RuntimeError("pep_write_failed")
+
+        transaction = self.pep.transaction_write_texts(
+            [
+                {"role": "backend", "path": backend.content["path"], "content": backend.content["content"]},
+                {"role": "test", "path": tests.content["path"], "content": tests.content["content"]},
+            ],
+            self.ROLE_PATHS,
+        )
+        if transaction.get("status") != "COMMITTED":
+            raise RuntimeError("pep_transaction_failed")
+
         return {
             "status": "PASSED",
             "agents": [plan.role, backend.role, tests.role, reviewer.role],
@@ -209,5 +220,7 @@ class ChiefOfStaffV65:
             "reviewer_advisory_received": reviewer.content["advisory_received"],
             "reviewer_approved": reviewer.content["approved"],
             "paths": [backend.content["path"], tests.content["path"]],
+            "pep_version": "6.6",
+            "pep_transaction": transaction,
             "model": os.environ.get("MODEL_NAME", ""),
         }
