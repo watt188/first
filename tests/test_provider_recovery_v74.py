@@ -1,7 +1,6 @@
 import os
 from unittest.mock import patch
 
-from real_provider.contracts_v61 import ProviderRequestV61
 from real_provider.openai_compatible_v61 import OpenAICompatibleProviderV61
 
 
@@ -14,25 +13,33 @@ def _configured():
     }, clear=False)
 
 
-def test_open_circuit_waits_then_allows_recovery_probe():
+def test_open_circuit_exposes_bounded_retry_after():
     provider = OpenAICompatibleProviderV61()
-    provider.failure_count = provider.circuit_threshold
-    provider.circuit_opened_at = 100.0
-    request = ProviderRequestV61("system", "user")
-    response = type("R", (), {"read": lambda self: b'{"choices":[{"message":{"content":"ok"}}]}', "__enter__": lambda self: self, "__exit__": lambda *a: None})()
-    with _configured(), patch("time.monotonic", side_effect=[100.25, 100.25, 101.0, 101.1]), patch("time.sleep") as sleep, patch("urllib.request.urlopen", return_value=response):
-        result = provider.invoke(request)
-    assert result.ok is True
-    sleep.assert_called_once()
+    with _configured(), patch("time.monotonic", return_value=100.25):
+        provider.failure_count = provider.circuit_threshold
+        provider.circuit_opened_at = 100.0
+        assert provider._circuit_is_open() is True
+        remaining = provider.circuit_retry_after_seconds()
+    assert 0 < remaining <= 1.0
+
+
+def test_expired_circuit_recovers_without_sleep():
+    provider = OpenAICompatibleProviderV61()
+    with _configured(), patch("time.monotonic", return_value=102.0), patch("time.sleep") as sleep:
+        provider.failure_count = provider.circuit_threshold
+        provider.circuit_opened_at = 100.0
+        assert provider._circuit_is_open() is False
+    sleep.assert_not_called()
     assert provider.failure_count == 0
     assert provider.circuit_opened_at is None
 
 
-def test_expired_circuit_needs_no_sleep():
+def test_health_reports_retry_after_without_secret_material():
     provider = OpenAICompatibleProviderV61()
-    provider.failure_count = provider.circuit_threshold
-    provider.circuit_opened_at = 100.0
-    with _configured(), patch("time.monotonic", return_value=102.0), patch("time.sleep") as sleep:
-        assert provider._circuit_is_open() is False
-    sleep.assert_not_called()
-    assert provider.failure_count == 0
+    with _configured(), patch("time.monotonic", return_value=100.5):
+        provider.failure_count = provider.circuit_threshold
+        provider.circuit_opened_at = 100.0
+        health = provider.health()
+    assert health["circuit_open"] is True
+    assert 0 < health["circuit_retry_after_seconds"] <= 1.0
+    assert "MODEL_API_KEY" not in health
