@@ -1,0 +1,32 @@
+name: v65-multi-agent
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+  MODEL_BASE_URL: ${{ secrets.MODEL_BASE_URL }}
+  MODEL_NAME: ${{ secrets.MODEL_NAME }}
+
+jobs:
+  chief-of-staff-multi-agent:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run planner specialist reviewer pipeline
+        run: python -m multi_agent.acceptance_v65
+      - name: Upload V6.5 evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v65-multi-agent-evidence
+          path: |
+            artifacts/v65-evidence.json
+            generated/feature_v65.py
+            generated/test_feature_v65.py
