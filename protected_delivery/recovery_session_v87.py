@@ -1,10 +1,9 @@
 import dataclasses
 import re
-from typing import Iterable
 
 from protected_delivery.recovery_evidence_v85 import RecoveryEvidenceEventV85, RecoveryEvidenceLedgerV85
 from protected_delivery.recovery_orchestrator_v84 import LiveRecoveryOrchestratorV84, RecoverySnapshotV84, WorkflowFailureV84
-from protected_delivery.recovery_reconcile_v86 import RecoveryStateReconcilerV86
+from protected_delivery.recovery_reconcile_v86 import LiveFailedJobV86, RecoveryLiveStateV86, RecoveryStateReconcilerV86
 
 VERSION = "8.7"
 
@@ -34,24 +33,32 @@ class RecoverySessionV87:
 class RecoverySessionCoordinatorV87:
     """Coordinate reconcile -> one recovery action -> append evidence.
 
-    The coordinator is exact-head bound and fail-closed. It performs a state
-    reconciliation immediately before recovery, delegates the single mutation
-    to V8.4, and records only an accepted receipt in the V8.5 evidence chain.
-    It never merges, bypasses policy, or writes to main.
+    The coordinator is exact-head bound and fail-closed. It reconciles live
+    state immediately before recovery, delegates one mutation to V8.4, and
+    records only an accepted single-failure receipt in the V8.5 chain. It
+    never merges, bypasses policy, changes required checks, or writes to main.
     """
 
     def __init__(self, gateway):
         self.orchestrator = LiveRecoveryOrchestratorV84(gateway)
 
-    def run(self, session: RecoverySessionV87) -> dict:
-        session.validate()
-
-        reconcile = RecoveryStateReconcilerV86.reconcile(
-            session.ledger,
+    @staticmethod
+    def _live_state(session: RecoverySessionV87) -> RecoveryLiveStateV86:
+        return RecoveryLiveStateV86(
             pr_number=session.pr_number,
             expected_head_sha=session.expected_head_sha,
             current_head_sha=session.current_head_sha,
-            failures=session.failures,
+            failed_jobs=tuple(
+                LiveFailedJobV86(f.workflow, f.job_id, f.conclusion)
+                for f in session.failures
+            ),
+        )
+
+    def run(self, session: RecoverySessionV87) -> dict:
+        session.validate()
+        reconcile = RecoveryStateReconcilerV86.reconcile(
+            session.ledger,
+            self._live_state(session),
         )
         if reconcile.get("status") != "RECONCILED":
             raise RuntimeError("reconciliation_not_verified")
