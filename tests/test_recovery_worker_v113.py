@@ -1,8 +1,9 @@
 import json
-from pathlib import Path
+import urllib.error
 
 import pytest
 
+import protected_delivery.recovery_worker_v113 as worker
 from protected_delivery.recovery_worker_v113 import (
     GitHubFailureEvidenceProbeV113,
     _decision_for,
@@ -43,7 +44,7 @@ def test_permission_failure_fails_closed():
     assert decision.action == "escalate_human"
 
 
-def test_secret_is_scoped_to_v113():
+def test_secret_is_scoped_to_v1131():
     assert len(_derive_secret("token")) == 32
     assert _derive_secret("token") == _derive_secret("token")
     assert _derive_secret("token") != _derive_secret("other")
@@ -108,3 +109,35 @@ def test_probe_rejects_failure_without_failed_jobs():
     )
     with pytest.raises(RuntimeError, match="failure_evidence_no_failed_jobs"):
         probe.collect(123)
+
+
+def test_log_redirect_fetch_does_not_forward_github_authorization(monkeypatch):
+    location = "https://signed.example.test/joblog"
+
+    class RedirectingOpener:
+        def open(self, request, timeout=0):
+            headers = {"Location": location}
+            raise urllib.error.HTTPError(request.full_url, 302, "Found", headers, None)
+
+    seen = {}
+
+    def fake_build_opener(*handlers):
+        return RedirectingOpener()
+
+    def fake_urlopen(request, timeout=0):
+        seen["url"] = request.full_url
+        seen["auth"] = request.headers.get("Authorization")
+        return Response(200, b"plain signed log")
+
+    monkeypatch.setattr(worker.urllib.request, "build_opener", fake_build_opener)
+    monkeypatch.setattr(worker.urllib.request, "urlopen", fake_urlopen)
+    probe = GitHubFailureEvidenceProbeV113(
+        repository_full_name="watt188/first", token="secret-token"
+    )
+    status, body = probe._log_request(
+        "https://api.github.com/repos/watt188/first/actions/jobs/7/logs"
+    )
+    assert status == 200
+    assert body == b"plain signed log"
+    assert seen["url"] == location
+    assert seen["auth"] is None
