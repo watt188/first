@@ -15,5 +15,5 @@ def test_non_writer_blocked(tmp_path:Path):
 
 
 def test_v113_nontransient_canary():
-    # V11.3.1 live retry: deterministic failure must remain non-retryable.
+    # V11.3.2 live retry: deterministic failure must remain non-retryable.
     raise AssertionError("deterministic test defect: do not classify as provider transient")
