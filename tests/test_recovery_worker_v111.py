@@ -1,6 +1,6 @@
 import pytest
 
-from protected_delivery.recovery_worker_v111 import _validate_event, _derive_secret
+from protected_delivery.recovery_worker_v111 import _validate_event, observe_worker_event
 
 SHA = "a" * 40
 
@@ -26,6 +26,7 @@ def test_provider_failure_is_selected():
         "pr_number": 56,
         "run_id": 123,
         "head_sha": SHA,
+        "run_attempt": 1,
     }
 
 
@@ -33,7 +34,7 @@ def test_second_attempt_is_not_retried_again():
     assert _validate_event(event(run_attempt=2)) is None
 
 
-def test_non_provider_workflow_is_not_auto_retried():
+def test_non_provider_workflow_is_not_auto_selected():
     assert _validate_event(event(name="ci")) is None
 
 
@@ -53,9 +54,14 @@ def test_invalid_identity_fails_closed():
         _validate_event(event(head_sha="bad"))
 
 
-def test_runtime_secret_is_deterministic_and_32_bytes():
-    first = _derive_secret("token")
-    second = _derive_secret("token")
-    assert first == second
-    assert len(first) == 32
-    assert first != _derive_secret("other")
+def test_candidate_is_observed_without_mutation_claim():
+    result = observe_worker_event(event=event(), repository_full_name="watt188/first")
+    assert result["status"] == "RECOVERY_CANDIDATE"
+    assert result["mutation_performed"] is False
+    assert result["requires_durable_gateway"] is True
+    assert result["run_id"] == 123
+
+
+def test_ignored_event_returns_no_action():
+    result = observe_worker_event(event=event(conclusion="success"), repository_full_name="watt188/first")
+    assert result == {"worker_version": "11.1", "status": "NO_ACTION"}
