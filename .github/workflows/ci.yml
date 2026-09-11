@@ -73,3 +73,5 @@ jobs:
         run: python -m pytest -q tests/test_recovery_command_v102.py
       - name: V10.3 authenticated recovery command gate
         run: python -m pytest -q tests/test_recovery_auth_v103.py
+      - name: V10.4 authentication key rotation gate
+        run: python -m pytest -q tests/test_recovery_auth_rotation_v104.py
