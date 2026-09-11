@@ -53,3 +53,5 @@ jobs:
         run: python -m pytest -q tests/test_recovery_transaction_v92.py
       - name: V9.3 pending action journal gate
         run: python -m pytest -q tests/test_recovery_pending_v93.py
+      - name: V9.4 journaled recovery executor gate
+        run: python -m pytest -q tests/test_recovery_journaled_v94.py
