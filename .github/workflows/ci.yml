@@ -69,3 +69,5 @@ jobs:
         run: python -m pytest -q tests/test_recovery_production_v100.py
       - name: V10.1 production recovery service gate
         run: python -m pytest -q tests/test_recovery_service_v101.py
+      - name: V10.2 production recovery command gate
+        run: python -m pytest -q tests/test_recovery_command_v102.py
