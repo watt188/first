@@ -3,6 +3,7 @@ import json
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from protected_delivery.recovery_durable_gateway_v112 import GitHubDurableMutati
 from protected_delivery.recovery_v82 import AutonomousRecoveryV82, FailureSignal
 from protected_delivery.recovery_worker_v111 import _validate_event
 
-VERSION = "11.3"
+VERSION = "11.3.1"
 _MAX_JOBS = 10
 _MAX_LOG_BYTES = 262144
 
@@ -19,11 +20,22 @@ _MAX_LOG_BYTES = 262144
 def _derive_secret(token: str) -> bytes:
     if not isinstance(token, str) or not token:
         raise ValueError("worker_token_missing")
-    return hashlib.sha256(("recovery-worker-v11.3\0" + token).encode()).digest()
+    return hashlib.sha256(("recovery-worker-v11.3.1\0" + token).encode()).digest()
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 class GitHubFailureEvidenceProbeV113:
-    """Read real failed-job evidence for one workflow run before mutation."""
+    """Read real failed-job evidence for one workflow run before mutation.
+
+    GitHub's job-log endpoint redirects to a short-lived signed blob URL. The
+    Authorization header must never be forwarded to that foreign host. V11.3.1
+    therefore handles the redirect explicitly and fetches the signed URL with
+    no GitHub credential header.
+    """
 
     def __init__(self, *, repository_full_name: str, token: str, timeout: float = 10.0, opener=None):
         if not isinstance(repository_full_name, str) or repository_full_name.count("/") != 1:
@@ -33,23 +45,62 @@ class GitHubFailureEvidenceProbeV113:
         self.repository = repository_full_name
         self.token = token
         self.timeout = float(timeout)
-        self.opener = opener or urllib.request.urlopen
+        self.opener = opener
 
-    def _request_bytes(self, url: str):
+    def _github_request(self, url: str):
         req = urllib.request.Request(
             url,
             headers={
                 "Accept": "application/vnd.github+json",
                 "Authorization": f"Bearer {self.token}",
                 "X-GitHub-Api-Version": "2022-11-28",
-                "User-Agent": "first-recovery-worker-v11.3",
+                "User-Agent": "first-recovery-worker-v11.3.1",
             },
         )
+        call = self.opener or urllib.request.urlopen
         try:
-            with self.opener(req, timeout=self.timeout) as response:
+            with call(req, timeout=self.timeout) as response:
                 return response.status, response.read(_MAX_LOG_BYTES + 1)
         except urllib.error.HTTPError as exc:
             raise RuntimeError(f"failure_evidence_http_{exc.code}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise RuntimeError("failure_evidence_transport_error") from exc
+
+    def _log_request(self, url: str):
+        if self.opener is not None:
+            return self._github_request(url)
+
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {self.token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "first-recovery-worker-v11.3.1",
+            },
+        )
+        opener = urllib.request.build_opener(_NoRedirect())
+        try:
+            with opener.open(req, timeout=self.timeout) as response:
+                return response.status, response.read(_MAX_LOG_BYTES + 1)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in {301, 302, 303, 307, 308}:
+                raise RuntimeError(f"failure_evidence_http_{exc.code}") from exc
+            location = exc.headers.get("Location")
+            parsed = urllib.parse.urlparse(location or "")
+            if parsed.scheme != "https" or not parsed.netloc:
+                raise RuntimeError("failure_evidence_invalid_log_redirect") from exc
+            signed_req = urllib.request.Request(
+                location,
+                headers={"User-Agent": "first-recovery-worker-v11.3.1"},
+            )
+            try:
+                with urllib.request.urlopen(signed_req, timeout=self.timeout) as response:
+                    return response.status, response.read(_MAX_LOG_BYTES + 1)
+            except urllib.error.HTTPError as signed_exc:
+                raise RuntimeError(f"failure_evidence_signed_log_http_{signed_exc.code}") from signed_exc
+            except (urllib.error.URLError, TimeoutError) as signed_exc:
+                raise RuntimeError("failure_evidence_signed_log_transport_error") from signed_exc
         except (urllib.error.URLError, TimeoutError) as exc:
             raise RuntimeError("failure_evidence_transport_error") from exc
 
@@ -57,7 +108,7 @@ class GitHubFailureEvidenceProbeV113:
         if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id < 1:
             raise ValueError("invalid_run_id")
         jobs_url = f"https://api.github.com/repos/{self.repository}/actions/runs/{run_id}/jobs?per_page={_MAX_JOBS}"
-        status, raw = self._request_bytes(jobs_url)
+        status, raw = self._github_request(jobs_url)
         if status != 200:
             raise RuntimeError("failure_evidence_jobs_unavailable")
         try:
@@ -79,7 +130,7 @@ class GitHubFailureEvidenceProbeV113:
             if not isinstance(job_id, int) or job_id < 1:
                 raise RuntimeError("failure_evidence_job_identity_invalid")
             log_url = f"https://api.github.com/repos/{self.repository}/actions/jobs/{job_id}/logs"
-            log_status, log_raw = self._request_bytes(log_url)
+            log_status, log_raw = self._log_request(log_url)
             if log_status != 200:
                 raise RuntimeError("failure_evidence_logs_unavailable")
             if len(log_raw) > _MAX_LOG_BYTES:
@@ -137,14 +188,14 @@ def run_worker(*, event: dict, repository_full_name: str, token: str, root, jour
     plane = ProductionRecoveryControlPlaneV1010(
         root=root,
         gateway=gateway,
-        owner="github-actions-worker-v113",
+        owner="github-actions-worker-v1131",
         nonce=f"run-{target['run_id']}",
-        secrets={"worker-v113": secret},
+        secrets={"worker-v1131": secret},
         repository_full_name=repository_full_name,
         gateway_capabilities=gateway.capabilities,
         github_token=token,
     )
-    plane.activate_key(key_id="worker-v113", not_before=now - 1)
+    plane.activate_key(key_id="worker-v1131", not_before=now - 1)
     payload = {
         "operation": "recover",
         "pr_number": target["pr_number"],
@@ -157,8 +208,8 @@ def run_worker(*, event: dict, repository_full_name: str, token: str, root, jour
         "now": now,
         "max_attempts": 1,
     }
-    nonce = hashlib.sha256(f"v113:{target['run_id']}:{target['head_sha']}".encode()).hexdigest()[:32]
-    envelope = plane.sign(key_id="worker-v113", timestamp=now, nonce=nonce, payload=payload)
+    nonce = hashlib.sha256(f"v1131:{target['run_id']}:{target['head_sha']}".encode()).hexdigest()[:32]
+    envelope = plane.sign(key_id="worker-v1131", timestamp=now, nonce=nonce, payload=payload)
     result = plane.handle(envelope, now=now)
     return {
         "worker_version": VERSION,
@@ -176,7 +227,7 @@ def run_worker(*, event: dict, repository_full_name: str, token: str, root, jour
 def main():
     with open(os.environ["GITHUB_EVENT_PATH"], "r", encoding="utf-8") as handle:
         event = json.load(handle)
-    root = Path(os.environ.get("RUNNER_TEMP", ".")) / "recovery-worker-v113"
+    root = Path(os.environ.get("RUNNER_TEMP", ".")) / "recovery-worker-v1131"
     root.mkdir(parents=True, exist_ok=True)
     result = run_worker(
         event=event,
@@ -185,7 +236,7 @@ def main():
         root=root,
         journal_branch=os.environ.get("RECOVERY_JOURNAL_BRANCH", "recovery-state-v112"),
     )
-    output = root / "v113-recovery-worker-report.json"
+    output = root / "v1131-recovery-worker-report.json"
     output.write_text(json.dumps(result, sort_keys=True, indent=2), encoding="utf-8")
     print(json.dumps(result, sort_keys=True))
 
