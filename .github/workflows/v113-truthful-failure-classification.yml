@@ -1,0 +1,19 @@
+name: v113-truthful-failure-classification
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Run truthful failure classification tests
+        run: python -m pytest -q tests/test_recovery_worker_v113.py

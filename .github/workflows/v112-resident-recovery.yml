@@ -1,4 +1,4 @@
-name: v112-resident-recovery
+name: v113-resident-recovery
 
 on:
   workflow_run:
@@ -29,10 +29,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Run durable recovery worker
+      - name: Run truthfully classified durable recovery worker
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           RECOVERY_JOURNAL_BRANCH: recovery-state-v112
           PYTHONPATH: ${{ github.workspace }}
-        run: python protected_delivery/recovery_worker_v112.py
+        run: python protected_delivery/recovery_worker_v113.py
