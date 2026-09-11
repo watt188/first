@@ -1,0 +1,31 @@
+name: v110-live-production-validation
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  live-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run live GitHub-backed recovery validation
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/v110_live_validation.py
+      - name: Upload production acceptance evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v110-live-production-validation-report
+          path: v110-live-validation-report.json
+          if-no-files-found: error

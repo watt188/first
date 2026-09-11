@@ -87,3 +87,5 @@ jobs:
         run: python -m pytest -q tests/test_recovery_readiness_v109.py
       - name: V10.10 final production convergence gate
         run: python -m pytest -q tests/test_recovery_control_plane_v1010.py
+      - name: V11.0 deterministic live-validation harness gate
+        run: python -m pytest -q tests/test_recovery_live_validation_v110.py
