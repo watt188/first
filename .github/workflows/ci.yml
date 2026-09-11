@@ -51,3 +51,5 @@ jobs:
         run: python -m pytest -q tests/test_recovery_state_sqlite_v91.py
       - name: V9.2 recovery transaction engine gate
         run: python -m pytest -q tests/test_recovery_transaction_v92.py
+      - name: V9.3 pending action journal gate
+        run: python -m pytest -q tests/test_recovery_pending_v93.py
