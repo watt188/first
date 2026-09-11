@@ -41,3 +41,5 @@ jobs:
         run: python -m pytest -q tests/test_recovery_reconcile_v86.py
       - name: V8.7 recovery session coordinator gate
         run: python -m pytest -q tests/test_recovery_session_v87.py
+      - name: V8.8 recovery replay guard gate
+        run: python -m pytest -q tests/test_recovery_replay_v88.py
