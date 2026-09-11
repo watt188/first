@@ -14,7 +14,7 @@ class Gateway:
         self.receipts = {}
 
     def execute_recovery(self, pr_number, expected_head_sha, action, job_id, idempotency_key):
-        receipt = {"accepted": True, "receipt": f"r-{idempotency_key}"}
+        receipt = {"accepted": True, "receipt_id": f"r-{idempotency_key}"}
         self.executed.append((pr_number, expected_head_sha, action, job_id, idempotency_key))
         self.receipts[idempotency_key] = receipt
         return receipt
