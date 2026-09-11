@@ -55,3 +55,5 @@ jobs:
         run: python -m pytest -q tests/test_recovery_pending_v93.py
       - name: V9.4 journaled recovery executor gate
         run: python -m pytest -q tests/test_recovery_journaled_v94.py
+      - name: V9.5 idempotent recovery gateway gate
+        run: python -m pytest -q tests/test_recovery_idempotent_v95.py
