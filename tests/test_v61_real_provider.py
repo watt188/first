@@ -12,3 +12,7 @@ def test_non_writer_blocked(tmp_path:Path):
     rt=RealModelProductionRuntimeV61(tmp_path,provider=FakeProviderV61(),github_repository_count=1)
     out=rt.writer_task("security","write code",["workspace_sample/x.py"])
     assert out["status"]=="BLOCKED"
+
+
+def test_v1132_transient_canary():
+    raise RuntimeError("http_503 controlled transient provider canary")
