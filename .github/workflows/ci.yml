@@ -57,3 +57,5 @@ jobs:
         run: python -m pytest -q tests/test_recovery_journaled_v94.py
       - name: V9.5 idempotent recovery gateway gate
         run: python -m pytest -q tests/test_recovery_idempotent_v95.py
+      - name: V9.6 idempotent recovery transaction gate
+        run: python -m pytest -q tests/test_recovery_transaction_idempotent_v96.py
