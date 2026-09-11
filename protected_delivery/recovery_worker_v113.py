@@ -12,7 +12,7 @@ from protected_delivery.recovery_durable_gateway_v112 import GitHubDurableMutati
 from protected_delivery.recovery_v82 import AutonomousRecoveryV82, FailureSignal
 from protected_delivery.recovery_worker_v111 import _validate_event
 
-VERSION = "11.3.1"
+VERSION = "11.3.2"
 _MAX_JOBS = 10
 _MAX_LOG_BYTES = 262144
 
@@ -20,7 +20,34 @@ _MAX_LOG_BYTES = 262144
 def _derive_secret(token: str) -> bytes:
     if not isinstance(token, str) or not token:
         raise ValueError("worker_token_missing")
-    return hashlib.sha256(("recovery-worker-v11.3.1\0" + token).encode()).digest()
+    return hashlib.sha256(("recovery-worker-v11.3.2\0" + token).encode()).digest()
+
+
+def _sanitize_runner_metadata(evidence: str) -> str:
+    """Remove GitHub runner capability boilerplate that can bias classification.
+
+    Hosted-runner logs contain a standard `GITHUB_TOKEN Permissions` group on
+    every job. V8.2 intentionally treats the word `permission` as a strong
+    fail-closed signal, so feeding that boilerplate into the classifier would
+    turn every failure into a permission escalation. Strip only the known
+    metadata block; actual failure text such as `permission denied`,
+    `forbidden`, or `Resource not accessible by integration` is preserved.
+    """
+    if not isinstance(evidence, str):
+        raise ValueError("invalid_failure_evidence")
+    kept = []
+    in_permissions = False
+    for line in evidence.splitlines():
+        normalized = line.lower()
+        if "##[group]github_token permissions" in normalized:
+            in_permissions = True
+            continue
+        if in_permissions:
+            if "##[endgroup]" in normalized:
+                in_permissions = False
+            continue
+        kept.append(line)
+    return "\n".join(kept)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -29,13 +56,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class GitHubFailureEvidenceProbeV113:
-    """Read real failed-job evidence for one workflow run before mutation.
-
-    GitHub's job-log endpoint redirects to a short-lived signed blob URL. The
-    Authorization header must never be forwarded to that foreign host. V11.3.1
-    therefore handles the redirect explicitly and fetches the signed URL with
-    no GitHub credential header.
-    """
+    """Read real failed-job evidence for one workflow run before mutation."""
 
     def __init__(self, *, repository_full_name: str, token: str, timeout: float = 10.0, opener=None):
         if not isinstance(repository_full_name, str) or repository_full_name.count("/") != 1:
@@ -54,7 +75,7 @@ class GitHubFailureEvidenceProbeV113:
                 "Accept": "application/vnd.github+json",
                 "Authorization": f"Bearer {self.token}",
                 "X-GitHub-Api-Version": "2022-11-28",
-                "User-Agent": "first-recovery-worker-v11.3.1",
+                "User-Agent": "first-recovery-worker-v11.3.2",
             },
         )
         call = self.opener or urllib.request.urlopen
@@ -69,14 +90,13 @@ class GitHubFailureEvidenceProbeV113:
     def _log_request(self, url: str):
         if self.opener is not None:
             return self._github_request(url)
-
         req = urllib.request.Request(
             url,
             headers={
                 "Accept": "application/vnd.github+json",
                 "Authorization": f"Bearer {self.token}",
                 "X-GitHub-Api-Version": "2022-11-28",
-                "User-Agent": "first-recovery-worker-v11.3.1",
+                "User-Agent": "first-recovery-worker-v11.3.2",
             },
         )
         opener = urllib.request.build_opener(_NoRedirect())
@@ -92,7 +112,7 @@ class GitHubFailureEvidenceProbeV113:
                 raise RuntimeError("failure_evidence_invalid_log_redirect") from exc
             signed_req = urllib.request.Request(
                 location,
-                headers={"User-Agent": "first-recovery-worker-v11.3.1"},
+                headers={"User-Agent": "first-recovery-worker-v11.3.2"},
             )
             try:
                 with urllib.request.urlopen(signed_req, timeout=self.timeout) as response:
@@ -148,7 +168,7 @@ def _decision_for(target: dict, evidence: str):
     signal = FailureSignal(
         workflow=target["workflow"],
         conclusion=target["conclusion"],
-        log_excerpt=evidence,
+        log_excerpt=_sanitize_runner_metadata(evidence),
     )
     return AutonomousRecoveryV82.next_action(signal, attempts=0, max_attempts=1)
 
@@ -188,14 +208,14 @@ def run_worker(*, event: dict, repository_full_name: str, token: str, root, jour
     plane = ProductionRecoveryControlPlaneV1010(
         root=root,
         gateway=gateway,
-        owner="github-actions-worker-v1131",
+        owner="github-actions-worker-v1132",
         nonce=f"run-{target['run_id']}",
-        secrets={"worker-v1131": secret},
+        secrets={"worker-v1132": secret},
         repository_full_name=repository_full_name,
         gateway_capabilities=gateway.capabilities,
         github_token=token,
     )
-    plane.activate_key(key_id="worker-v1131", not_before=now - 1)
+    plane.activate_key(key_id="worker-v1132", not_before=now - 1)
     payload = {
         "operation": "recover",
         "pr_number": target["pr_number"],
@@ -204,12 +224,12 @@ def run_worker(*, event: dict, repository_full_name: str, token: str, root, jour
         "workflow": target["workflow"],
         "job_id": target["run_id"],
         "conclusion": target["conclusion"],
-        "log_excerpt": evidence,
+        "log_excerpt": _sanitize_runner_metadata(evidence),
         "now": now,
         "max_attempts": 1,
     }
-    nonce = hashlib.sha256(f"v1131:{target['run_id']}:{target['head_sha']}".encode()).hexdigest()[:32]
-    envelope = plane.sign(key_id="worker-v1131", timestamp=now, nonce=nonce, payload=payload)
+    nonce = hashlib.sha256(f"v1132:{target['run_id']}:{target['head_sha']}".encode()).hexdigest()[:32]
+    envelope = plane.sign(key_id="worker-v1132", timestamp=now, nonce=nonce, payload=payload)
     result = plane.handle(envelope, now=now)
     return {
         "worker_version": VERSION,
@@ -227,7 +247,7 @@ def run_worker(*, event: dict, repository_full_name: str, token: str, root, jour
 def main():
     with open(os.environ["GITHUB_EVENT_PATH"], "r", encoding="utf-8") as handle:
         event = json.load(handle)
-    root = Path(os.environ.get("RUNNER_TEMP", ".")) / "recovery-worker-v1131"
+    root = Path(os.environ.get("RUNNER_TEMP", ".")) / "recovery-worker-v1132"
     root.mkdir(parents=True, exist_ok=True)
     result = run_worker(
         event=event,
@@ -236,7 +256,7 @@ def main():
         root=root,
         journal_branch=os.environ.get("RECOVERY_JOURNAL_BRANCH", "recovery-state-v112"),
     )
-    output = root / "v1131-recovery-worker-report.json"
+    output = root / "v1132-recovery-worker-report.json"
     output.write_text(json.dumps(result, sort_keys=True, indent=2), encoding="utf-8")
     print(json.dumps(result, sort_keys=True))
 
