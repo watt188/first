@@ -1,0 +1,38 @@
+name: v112-resident-recovery
+
+on:
+  workflow_run:
+    workflows:
+      - v61-real-provider
+      - v62-provider-smoke
+      - v63-strict-provider
+      - v67-provider-resilience
+      - v74-provider-reliability
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: read
+
+jobs:
+  recover:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: recovery-${{ github.event.workflow_run.id }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run durable recovery worker
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RECOVERY_JOURNAL_BRANCH: recovery-state-v112
+          PYTHONPATH: ${{ github.workspace }}
+        run: python protected_delivery/recovery_worker_v112.py
