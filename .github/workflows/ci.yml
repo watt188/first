@@ -65,3 +65,5 @@ jobs:
         run: python -m pytest -q tests/test_recovery_runtime_v98.py
       - name: V9.9 recovery runtime audit gate
         run: python -m pytest -q tests/test_recovery_runtime_audit_v99.py
+      - name: V10.0 production recovery convergence gate
+        run: python -m pytest -q tests/test_recovery_production_v100.py
