@@ -33,3 +33,5 @@ jobs:
         run: python -m pytest -q tests/test_recovery_v82.py
       - name: V8.3 recovery action bridge gate
         run: python -m pytest -q tests/test_recovery_action_v83.py
+      - name: V8.4 live recovery orchestrator gate
+        run: python -m pytest -q tests/test_recovery_orchestrator_v84.py
