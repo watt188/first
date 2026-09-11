@@ -1,0 +1,73 @@
+name: required-context-mirror-v76
+
+on:
+  pull_request:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  mirror:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {context: ci, workflow: ci.yml}
+          - {context: v6-production-baseline, workflow: v6-production-baseline.yml}
+          - {context: v61-real-provider, workflow: v61-real-provider.yml}
+          - {context: v62-provider-smoke, workflow: v62-provider-smoke.yml}
+          - {context: v63-strict-provider, workflow: v63-strict-provider.yml}
+          - {context: v64-real-codegen, workflow: v64-real-codegen.yml}
+          - {context: v65-multi-agent, workflow: v65-multi-agent.yml}
+          - {context: v66-pep-hardening, workflow: v66-pep-hardening.yml}
+          - {context: v67-provider-resilience, workflow: v67-provider-resilience.yml}
+          - {context: v68-execution-isolation, workflow: v68-execution-isolation.yml}
+          - {context: v69-evidence-integrity, workflow: v69-evidence-integrity.yml}
+          - {context: v70-production-convergence, workflow: v70-production-convergence.yml}
+          - {context: v71-autonomous-delivery, workflow: v71-autonomous-delivery.yml}
+          - {context: v72-github-delivery-bridge, workflow: v72-github-delivery-bridge.yml}
+          - {context: v73-live-github-mutation, workflow: v73-live-github-mutation.yml}
+          - {context: v74-provider-reliability, workflow: v74-provider-reliability.yml}
+          - {context: v75-merge-authorization, workflow: v75-merge-authorization.yml}
+    name: ${{ matrix.context }}
+    runs-on: ubuntu-24.04
+    env:
+      SOURCE_WORKFLOW: ${{ matrix.workflow }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for authoritative source workflow
+        run: |
+          python - <<'PY'
+          import json, os, time, urllib.parse, urllib.request
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          workflow = os.environ['SOURCE_WORKFLOW']
+          head = os.environ['HEAD_SHA']
+          token = os.environ['GH_TOKEN']
+          base = f"https://api.github.com/repos/{repo}/actions/workflows/{urllib.parse.quote(workflow, safe='')}/runs"
+          query = urllib.parse.urlencode({'head_sha': head, 'event': 'pull_request', 'per_page': 10})
+          request_url = base + '?' + query
+
+          deadline = time.time() + 600
+          while time.time() < deadline:
+              req = urllib.request.Request(request_url, headers={
+                  'Accept': 'application/vnd.github+json',
+                  'Authorization': 'Bearer ' + token,
+                  'X-GitHub-Api-Version': '2022-11-28',
+              })
+              with urllib.request.urlopen(req, timeout=20) as resp:
+                  payload = json.loads(resp.read().decode('utf-8'))
+              runs = [r for r in payload.get('workflow_runs', []) if r.get('head_sha') == head]
+              if runs:
+                  run = sorted(runs, key=lambda r: r.get('run_attempt', 1), reverse=True)[0]
+                  status, conclusion = run.get('status'), run.get('conclusion')
+                  print(json.dumps({'workflow': workflow, 'status': status, 'conclusion': conclusion, 'run_id': run.get('id')}))
+                  if status == 'completed':
+                      if conclusion == 'success':
+                          raise SystemExit(0)
+                      raise SystemExit(f"authoritative_workflow_failed:{workflow}:{conclusion}")
+              time.sleep(5)
+          raise SystemExit(f"authoritative_workflow_timeout:{workflow}")
+          PY
