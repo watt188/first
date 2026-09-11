@@ -1,0 +1,20 @@
+name: v112-durable-mutation-gateway
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Run durable gateway tests
+        run: python -m pytest -q tests/test_recovery_durable_gateway_v112.py tests/test_recovery_worker_v112.py

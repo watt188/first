@@ -91,3 +91,5 @@ jobs:
         run: python -m pytest -q tests/test_recovery_live_validation_v110.py
       - name: V11.1 resident recovery worker gate
         run: python -m pytest -q tests/test_recovery_worker_v111.py
+      - name: V11.2 durable mutation gateway gate
+        run: python -m pytest -q tests/test_recovery_durable_gateway_v112.py tests/test_recovery_worker_v112.py
