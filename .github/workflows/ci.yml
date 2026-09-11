@@ -29,3 +29,5 @@ jobs:
           PY
       - name: V8.1 protected autonomous delivery gate
         run: python -m pytest -q tests/test_protected_delivery_v81.py
+      - name: V8.2 autonomous recovery gate
+        run: python -m pytest -q tests/test_recovery_v82.py
