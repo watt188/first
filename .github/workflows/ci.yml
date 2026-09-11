@@ -83,3 +83,5 @@ jobs:
         run: python -m pytest -q tests/test_recovery_authoritative_v107.py
       - name: V10.8 live GitHub head resolver gate
         run: python -m pytest -q tests/test_recovery_github_head_v108.py
+      - name: V10.9 production readiness gate
+        run: python -m pytest -q tests/test_recovery_readiness_v109.py
