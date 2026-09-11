@@ -2,6 +2,7 @@ name: v75-merge-authorization
 
 on:
   pull_request:
+  pull_request_target:
 
 permissions:
   contents: read
@@ -10,6 +11,7 @@ permissions:
 
 jobs:
   merge-authorization:
+    name: v75-merge-authorization
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
