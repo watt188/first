@@ -8,6 +8,7 @@ from protected_delivery.recovery_worker_v113 import (
     GitHubFailureEvidenceProbeV113,
     _decision_for,
     _derive_secret,
+    _sanitize_runner_metadata,
 )
 
 SHA = "a" * 40
@@ -36,6 +37,7 @@ def test_plain_test_failure_is_not_fabricated_as_transient():
     decision = _decision_for(target(), "AssertionError: expected DONE but got FAILED")
     assert decision.action == "escalate_human"
     assert decision.retryable is False
+    assert decision.category == "ambiguous"
 
 
 def test_permission_failure_fails_closed():
@@ -44,7 +46,34 @@ def test_permission_failure_fails_closed():
     assert decision.action == "escalate_human"
 
 
-def test_secret_is_scoped_to_v1131():
+def test_runner_token_permissions_boilerplate_does_not_force_permission_category():
+    evidence = """2026 ##[group]GITHUB_TOKEN Permissions
+Actions: write
+Contents: write
+PullRequests: read
+2026 ##[endgroup]
+AssertionError: deterministic test defect
+"""
+    sanitized = _sanitize_runner_metadata(evidence)
+    assert "GITHUB_TOKEN Permissions" not in sanitized
+    assert "AssertionError" in sanitized
+    decision = _decision_for(target(), evidence)
+    assert decision.category == "ambiguous"
+    assert decision.action == "escalate_human"
+
+
+def test_real_permission_text_survives_sanitization():
+    evidence = """##[group]GITHUB_TOKEN Permissions
+Actions: write
+##[endgroup]
+permission denied while accessing protected resource
+"""
+    decision = _decision_for(target(), evidence)
+    assert decision.category == "permission"
+    assert decision.action == "escalate_human"
+
+
+def test_secret_is_scoped_to_v1132():
     assert len(_derive_secret("token")) == 32
     assert _derive_secret("token") == _derive_secret("token")
     assert _derive_secret("token") != _derive_secret("other")
