@@ -29,7 +29,6 @@ jobs:
           - {context: v72-github-delivery-bridge, workflow: v72-github-delivery-bridge.yml}
           - {context: v73-live-github-mutation, workflow: v73-live-github-mutation.yml}
           - {context: v74-provider-reliability, workflow: v74-provider-reliability.yml}
-          - {context: v75-merge-authorization, workflow: v75-merge-authorization.yml}
     name: ${{ matrix.context }}
     runs-on: ubuntu-24.04
     env:
