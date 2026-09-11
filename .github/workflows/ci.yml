@@ -61,3 +61,5 @@ jobs:
         run: python -m pytest -q tests/test_recovery_transaction_idempotent_v96.py
       - name: V9.7 recovery transaction reconciler gate
         run: python -m pytest -q tests/test_recovery_transaction_reconcile_v97.py
+      - name: V9.8 recovery runtime supervisor gate
+        run: python -m pytest -q tests/test_recovery_runtime_v98.py
