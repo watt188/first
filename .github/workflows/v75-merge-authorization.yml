@@ -5,6 +5,8 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 jobs:
   merge-authorization:
@@ -19,13 +21,29 @@ jobs:
         run: python -m pytest -q tests/test_merge_gate_v75.py
       - name: Run V7.6 deterministic server policy tests
         run: python -m pytest -q tests/test_server_policy_v76.py
-      - name: Attest live GitHub server ruleset
+      - name: Capture live GitHub server policy evidence
         env:
           RULESET_URL: https://api.github.com/repos/watt188/first/rulesets/22864994
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          mkdir -p artifacts
           python - <<'PY'
           import json, os
+          from pathlib import Path
           from github_delivery.server_policy_v76 import fetch_and_validate
           result = fetch_and_validate(os.environ['RULESET_URL'])
+          result['head_sha'] = os.environ['HEAD_SHA']
+          Path('artifacts/v77-server-policy-evidence.json').write_text(
+              json.dumps(result, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
           print(json.dumps(result, sort_keys=True))
           PY
+      - name: Attest V7.7 evidence provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: artifacts/v77-server-policy-evidence.json
+      - name: Upload V7.7 evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v77-server-policy-evidence
+          path: artifacts/v77-server-policy-evidence.json
