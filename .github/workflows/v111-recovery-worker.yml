@@ -1,0 +1,40 @@
+name: v111-recovery-worker
+
+on:
+  workflow_run:
+    workflows:
+      - v61-real-provider
+      - v62-provider-smoke
+      - v63-strict-provider
+      - v67-provider-resilience
+      - v74-provider-reliability
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Observe recovery candidate
+        id: worker
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m protected_delivery.recovery_worker_v111
+      - name: Upload worker evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: v111-recovery-worker-${{ github.event.workflow_run.id }}
+          path: ${{ runner.temp }}/v111-recovery-worker-report.json
+          if-no-files-found: error
+          retention-days: 14
