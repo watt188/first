@@ -1,11 +1,12 @@
-import io
 import urllib.error
 
 import pytest
 
+from protected_delivery.recovery_authoritative_github_v108 import GitHubAuthoritativeRecoveryCommandV108
 from protected_delivery.recovery_github_head_v108 import GitHubPRHeadResolverV108
 
 SHA = "a" * 40
+OTHER = "b" * 40
 
 
 class Response:
@@ -21,6 +22,15 @@ class Response:
 
     def read(self):
         return self.body
+
+
+class Command:
+    def __init__(self):
+        self.calls = []
+
+    def execute(self, payload):
+        self.calls.append(dict(payload))
+        return {"status": "PRODUCTION_RECOVERY_CONVERGED"}
 
 
 def test_resolves_live_head_and_builds_strict_request():
@@ -68,6 +78,43 @@ def test_invalid_payload_and_head_fail_closed():
     )
     with pytest.raises(RuntimeError, match="invalid_authoritative_github_head_sha"):
         bad_sha(1)
+
+
+def test_composed_command_uses_live_github_head_and_overwrites_caller_value():
+    command = Command()
+    opener = lambda req, timeout: Response((f'{{"head":{{"sha":"{SHA}"}}}}').encode())
+    bound = GitHubAuthoritativeRecoveryCommandV108(
+        command=command,
+        repository_full_name="watt188/first",
+        opener=opener,
+    )
+    result = bound.execute({
+        "operation": "recover",
+        "pr_number": 52,
+        "expected_head_sha": SHA,
+        "current_head_sha": OTHER,
+    })
+    assert command.calls[0]["current_head_sha"] == SHA
+    assert result["github_binding_version"] == "10.8"
+    assert result["authoritative_head_sha"] == SHA
+
+
+def test_composed_command_rejects_stale_expected_head_before_command():
+    command = Command()
+    opener = lambda req, timeout: Response((f'{{"head":{{"sha":"{OTHER}"}}}}').encode())
+    bound = GitHubAuthoritativeRecoveryCommandV108(
+        command=command,
+        repository_full_name="watt188/first",
+        opener=opener,
+    )
+    with pytest.raises(RuntimeError, match="stale_pr_head"):
+        bound.execute({
+            "operation": "recover",
+            "pr_number": 52,
+            "expected_head_sha": SHA,
+            "current_head_sha": SHA,
+        })
+    assert command.calls == []
 
 
 def test_constructor_and_pr_validation():
