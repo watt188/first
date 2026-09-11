@@ -89,3 +89,5 @@ jobs:
         run: python -m pytest -q tests/test_recovery_control_plane_v1010.py
       - name: V11.0 deterministic live-validation harness gate
         run: python -m pytest -q tests/test_recovery_live_validation_v110.py
+      - name: V11.1 resident recovery worker gate
+        run: python -m pytest -q tests/test_recovery_worker_v111.py
